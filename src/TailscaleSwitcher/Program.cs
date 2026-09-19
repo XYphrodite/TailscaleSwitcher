@@ -123,6 +123,7 @@ while (true)
     Console.WriteLine("  5) Проверить внешний IP (мой IP в инете)");
     Console.WriteLine("  6) Показать мой Tailscale IP");
     Console.WriteLine("  7) Открыть админку Tailnet в браузере");
+    Console.WriteLine("  8) Авто-фикс Happ + exit-node (r1600 -> Happ -> xeon)");
     Console.WriteLine("  0) Выход");
     Console.WriteLine(new string('─', 55));
     Console.Write("  Выбери пункт > ");
@@ -137,6 +138,7 @@ while (true)
         case "5": await CheckPublicIpAsync(); break;
         case "6": ShowTailscaleIp(); break;
         case "7": OpenAdmin(); break;
+        case "8": await AutoFixHappExitNodeAsync(); break;
         case "0": return;
         default:
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -388,6 +390,148 @@ void OpenAdmin()
         Console.WriteLine("Открываю админку в браузере...");
     }
     catch (Exception ex) { Console.WriteLine(ex.Message); }
+}
+
+async Task AutoFixHappExitNodeAsync()
+{
+    Console.WriteLine();
+    Console.WriteLine("── Авто-фикс Happ + exit-node ──");
+    if (!IsAdmin())
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine("❌ Нужны права Администратора. Перезапусти от Админа.");
+        Console.ResetColor();
+        return;
+    }
+    var xeonIp = "100.119.48.15";
+    var nodes = GetExitNodes();
+    var xeon = nodes.FirstOrDefault(n => n.TailscaleIP == xeonIp);
+    if (xeon == null)
+    {
+        Console.WriteLine($"Ищу xeon {xeonIp} среди exit-node...");
+        foreach (var n in nodes) Console.WriteLine($"  - {n.HostName} {n.TailscaleIP}");
+        if (nodes.Count == 0) Console.WriteLine("xeon пока не offers exit-node — включи на xeon: tailscale set --advertise-exit-node=true");
+    }
+    else
+    {
+        Console.WriteLine($"✓ Найден xeon: {xeon.HostName} {xeon.TailscaleIP} {(xeon.Online ? "online" : "offline")}");
+    }
+
+    // 1) найти физ. шлюз (не Tailscale, не happ-xray)
+    Console.WriteLine("Ищу физический шлюз...");
+    var (_, routeOut, _) = RunRaw("route", "print 0.0.0.0", 5000);
+    // fallback: ipconfig
+    var gateway = "";
+    string? happGw = null;
+    // парсим route print: ищем строку 0.0.0.0 с шлюзом != On-link и интерфейсом != Tailscale/happ
+    foreach (var line in routeOut.Split('\n'))
+    {
+        var t = line.Trim();
+        if (!t.StartsWith("0.0.0.0")) continue;
+        var parts = t.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 4)
+        {
+            var g = parts[2];
+            var iface = parts[3];
+            if (g == "On-link") continue;
+            // 10.47.226.95 — физ, 172.19.0.1 — happ, 100.x — tailscale
+            if (g.StartsWith("172.19.") || g.StartsWith("100.")) { happGw = g; continue; }
+            if (System.Net.IPAddress.TryParse(g, out _)) { gateway = g; break; }
+        }
+    }
+    if (string.IsNullOrEmpty(gateway))
+    {
+        // fallback: из ipconfig Ethernet 2
+        var (_, ipOut, _) = RunRaw("ipconfig", "", 5000);
+        foreach (var line in ipOut.Split('\n'))
+        {
+            if (line.Contains("Основной шлюз") && line.Contains("10."))
+            {
+                var p = line.Split(':');
+                if (p.Length == 2) gateway = p[1].Trim();
+            }
+        }
+    }
+    Console.WriteLine($"  физ. шлюз: {(string.IsNullOrEmpty(gateway) ? "не найден" : gateway)}  happ gw: {happGw ?? "-"}");
+    if (string.IsNullOrEmpty(gateway))
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("Не нашел физ. шлюз (10.47.226.95). Проверь route print вручную.");
+        Console.ResetColor();
+        gateway = "10.47.226.95";
+        Console.WriteLine($"  использую {gateway} по умолчанию");
+    }
+
+    // 2) найти IP сервера Happ (ESTABLISHED через happ)
+    Console.WriteLine("Ищу сервер Happ...");
+    var happIps = new HashSet<string>();
+    // netstat
+    var (_, nsOut, _) = RunRaw("netstat", "-an", 5000);
+    foreach (var line in nsOut.Split('\n'))
+    {
+        if (!line.Contains("ESTABLISHED")) continue;
+        if (line.Contains("100.108.") || line.Contains("100.119.") || line.Contains("127.0.0.1") || line.Contains("172.19.224.")) continue;
+        // ищем внешний 443 через happ (172.19.0.1:) или 10.217.*
+        if (line.Contains("172.19.0.1:") || line.Contains("10.217."))
+        {
+            var parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 3)
+            {
+                var remote = parts[2]; // 185.84.98.5:443
+                var ip = remote.Split(':')[0];
+                if (System.Net.IPAddress.TryParse(ip, out var a) && !a.ToString().StartsWith("172.") && !a.ToString().StartsWith("192.168.") && !a.ToString().StartsWith("100."))
+                    happIps.Add(ip);
+            }
+        }
+    }
+    // также из Get-NetTCPConnection через Happ pid
+    var (_, psOut, _) = RunRaw("powershell", "-NoProfile -Command \"Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -like '172.19.*' } | Select-Object -ExpandProperty RemoteAddress | Sort-Object -Unique\"", 5000);
+    foreach (var ip in psOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+    {
+        var t = ip.Trim();
+        if (System.Net.IPAddress.TryParse(t, out _)) happIps.Add(t);
+    }
+    Console.WriteLine($"  найдено Happ IP: {(happIps.Count == 0 ? "нет" : string.Join(", ", happIps.Take(5)))}");
+
+    if (happIps.Count == 0)
+    {
+        Console.WriteLine("  Happ IP не нашел — пропускаю добавление маршрута (попробуй вручную: netstat -an | findstr 172.19.0.1)");
+    }
+    else
+    {
+        foreach (var hip in happIps.Take(5))
+        {
+            Console.Write($"  route add {hip} mask 255.255.255.255 {gateway} metric 1 ... ");
+            var (_, _, err, code) = RunRawFull("route", $"add {hip} mask 255.255.255.255 {gateway} metric 1", 5000);
+            if (code == 0) { Console.ForegroundColor = ConsoleColor.Green; Console.WriteLine("OK"); Console.ResetColor(); }
+            else
+            {
+                // уже есть?
+                if (err.Contains("already") || err.Contains("уже")) { Console.WriteLine("уже есть"); }
+                else { Console.ForegroundColor = ConsoleColor.Yellow; Console.WriteLine($"код {code} {err}"); Console.ResetColor(); }
+            }
+        }
+    }
+
+    // 3) включить exit-node
+    Console.WriteLine($"Включаю exit-node {xeonIp} --allow-lan=true ...");
+    var (outp, err2, code2) = RunTailscale($"set --exit-node={xeonIp} --exit-node-allow-lan-access=true");
+    if (code2 == 0)
+    {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("✓ Exit-node включен");
+        Console.ResetColor();
+    }
+    else
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"❌ tailscale set код {code2}: {err2} {outp}");
+        Console.ResetColor();
+    }
+    Console.WriteLine("Проверяю...");
+    await CheckPublicIpAsync();
+    var (pingOut, _, _) = RunTailscale("ping -c 3 100.119.48.15", 8000);
+    if (!string.IsNullOrWhiteSpace(pingOut)) Console.WriteLine(pingOut.Trim());
 }
 
 List<ExitNodeInfo> GetExitNodes()
