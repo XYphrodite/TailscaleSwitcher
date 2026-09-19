@@ -1,0 +1,335 @@
+<#
+.SYNOPSIS
+    Installs TailscaleSwitcher - a console tool for Tailscale exit-node switching.
+
+.DESCRIPTION
+    Downloads TailscaleSwitcher-win-x64.zip from GitHub Releases (the public download
+    URLs, not the REST API), verifies the SHA-256 asset, extracts it and adds
+    the install directory to the user PATH.
+
+    This file is intentionally ASCII-only: Windows PowerShell 5.1 reads a BOM-less
+    script as ANSI, while `irm | iex` chokes on a leading BOM. ASCII keeps both
+    paths working.
+
+.EXAMPLE
+    irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.ps1 | iex
+
+.EXAMPLE
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.ps1))) -InstallDir 'D:\TailscaleSwitcher'
+
+.EXAMPLE
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.ps1))) -DesktopShortcut
+
+.PARAMETER DesktopShortcut
+    Also create a shortcut on the current user's desktop. Off by default.
+
+.PARAMETER NoShortcut
+    Do not create any shortcuts, including when DesktopShortcut is specified.
+#>
+#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [string] $InstallDir = (Join-Path $env:LOCALAPPDATA 'Programs\TailscaleSwitcher'),
+
+    [string] $Version = 'latest',
+
+    [switch] $NoPath,
+
+    [switch] $NoShortcut,
+
+    [switch] $DesktopShortcut
+)
+
+$ErrorActionPreference = 'Stop'
+$Repository = 'XYphrodite/TailscaleSwitcher'
+$AssetName = 'TailscaleSwitcher-win-x64.zip'
+$UserAgent = @{ 'User-Agent' = 'tailscaleswitcher-installer' }
+
+$previousProgress = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
+
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {
+    Write-Verbose "TLS 1.2 already enabled: $_"
+}
+
+function Write-Step {
+    param([string] $Message)
+    Write-Host "==> $Message" -ForegroundColor Cyan
+}
+
+function Send-ShortcutNotification {
+    param([string] $Path, [bool] $Created)
+    if (-not ('TailscaleSwitcher.InstallerShell' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace TailscaleSwitcher {
+    public static class InstallerShell {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        public static extern void SHChangeNotify(int eventId, uint flags, string item1, IntPtr item2);
+    }
+}
+'@
+    }
+    $eventId = if ($Created) { 0x2 } else { 0x2000 }
+    [TailscaleSwitcher.InstallerShell]::SHChangeNotify($eventId, 0x2005, $Path, [IntPtr]::Zero)
+}
+
+function New-TailscaleSwitcherShortcut {
+    param([string] $Executable, [string] $Folder)
+    if ([string]::IsNullOrWhiteSpace($Folder) -or -not [IO.Path]::IsPathRooted($Folder)) {
+        throw 'Windows did not return a shortcut folder.'
+    }
+    $Executable = [IO.Path]::GetFullPath($Executable)
+    if (-not [IO.File]::Exists($Executable)) { throw 'TailscaleSwitcher executable not found.' }
+    [IO.Directory]::CreateDirectory($Folder) | Out-Null
+    $path = Join-Path $Folder 'TailscaleSwitcher.lnk'
+    $existed = Test-Path -LiteralPath $path
+    if ($existed -and ([IO.File]::GetAttributes($path) -band ([IO.FileAttributes]::ReparsePoint -bor [IO.FileAttributes]::Directory))) {
+        throw 'TailscaleSwitcher.lnk is a directory or symbolic link.'
+    }
+    $temporary = Join-Path $Folder ('.TailscaleSwitcher-' + [guid]::NewGuid().ToString('N') + '.lnk')
+    $wshell = $null
+    $lnk = $null
+    try {
+        $wshell = New-Object -ComObject WScript.Shell
+        if ($existed) { [IO.File]::Copy($path, $temporary) }
+        $lnk = $wshell.CreateShortcut($temporary)
+        if ($existed) {
+            if ($lnk.TargetPath -ine $Executable -or -not [string]::IsNullOrEmpty($lnk.Arguments)) {
+                throw 'TailscaleSwitcher.lnk targets another copy or has custom arguments. Rename it and retry.'
+            }
+        } else {
+            $lnk.TargetPath = $Executable
+            $lnk.WorkingDirectory = [IO.Path]::GetDirectoryName($Executable)
+            $lnk.Description = 'Tailscale exit-node switcher'
+            $lnk.WindowStyle = 1
+        }
+        $lnk.IconLocation = "$Executable,0"
+        $lnk.Save()
+        if (-not [IO.File]::Exists($temporary)) { throw 'Windows did not save the shortcut.' }
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($lnk) | Out-Null
+        $lnk = $null
+        # PS 5.1 coerces $null to an empty string for string parameters.
+        if ($existed) { [IO.File]::Replace($temporary, $path, [NullString]::Value) }
+        else { [IO.File]::Move($temporary, $path) }
+        try { Send-ShortcutNotification -Path $path -Created (-not $existed) }
+        catch { Write-Verbose "Shortcut saved, but Shell notification failed: $_" }
+        return $path
+    } finally {
+        if ($null -ne $lnk) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($lnk) | Out-Null }
+        if ($null -ne $wshell) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($wshell) | Out-Null }
+        # Only this function's unique temporary file, never a folder or the user's link.
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+
+function Install-TailscaleSwitcherShortcuts {
+    [CmdletBinding()]
+    param(
+        [string] $Executable,
+        [switch] $NoShortcut,
+        [switch] $DesktopShortcut,
+        [scriptblock] $FolderPath = { param($Name) [Environment]::GetFolderPath([Environment+SpecialFolder]::$Name) }
+    )
+    if ($NoShortcut) { return }
+    $destinations = @('Programs')
+    if ($DesktopShortcut) { $destinations += 'DesktopDirectory' }
+    foreach ($destination in $destinations) {
+        try {
+            $path = New-TailscaleSwitcherShortcut -Executable $Executable -Folder (& $FolderPath $destination)
+            Write-Step "Shortcut: $path"
+        } catch {
+            Write-Warning "Could not create $destination shortcut: $($_.Exception.Message). You can retry in TailscaleSwitcher Settings."
+        }
+    }
+}
+
+function Get-ResponseUri {
+    param($Response)
+
+    if ($null -eq $Response) { return $null }
+    $base = $Response.BaseResponse
+    if ($null -eq $base) { return $null }
+    if ($base.ResponseUri) { return [string]$base.ResponseUri }
+    if ($base.RequestMessage -and $base.RequestMessage.RequestUri) {
+        return [string]$base.RequestMessage.RequestUri
+    }
+    return $null
+}
+
+function Get-ReleaseTag {
+    param([string] $Requested)
+
+    if ($Requested -ne 'latest') {
+        if ($Requested -notmatch '^v') { return "v$Requested" }
+        return $Requested
+    }
+
+    try {
+        $resp = Invoke-WebRequest -Uri "https://github.com/$Repository/releases/latest" -UseBasicParsing -Headers $UserAgent
+        $uri = Get-ResponseUri $resp
+        if ($uri -match '/releases/tag/(v?[A-Za-z0-9._-]+)') {
+            $tag = $Matches[1]
+            if ($tag -notmatch '^v') { $tag = "v$tag" }
+            return $tag
+        }
+
+        $html = $resp.Content
+        if ($html -is [byte[]]) { $html = [Text.Encoding]::UTF8.GetString($html) }
+        if ([string]$html -match '/releases/tag/(v\d+\.\d+\.\d+)') {
+            return $Matches[1]
+        }
+    } catch {
+        Write-Verbose "could not resolve latest tag: $($_.Exception.Message)"
+    }
+
+    return 'latest'
+}
+
+function Save-ReleaseAsset {
+    param(
+        [Parameter(Mandatory = $true)][string] $Url,
+        [Parameter(Mandatory = $true)][string] $Destination,
+        [Parameter(Mandatory = $true)][string] $Name
+    )
+
+    # HttpWebRequest rather than Invoke-WebRequest: in Windows PowerShell 5.1
+    # IWR buffers the body and its built-in bar makes a ~60 MB download crawl.
+    # Streaming plus a throttled Write-Progress bar stays honest and fast.
+    $request = [Net.HttpWebRequest]::Create($Url)
+    $request.UserAgent = 'tailscaleswitcher-installer'
+    $request.Timeout = 60000
+    $request.ReadWriteTimeout = 300000
+    $request.AllowAutoRedirect = $true
+
+    $response = $request.GetResponse()
+    try {
+        $total = $response.ContentLength
+        $source = $response.GetResponseStream()
+        $file = [IO.File]::Create($Destination)
+        try {
+            $buffer = New-Object byte[] 81920
+            $received = 0L
+            $started = [Diagnostics.Stopwatch]::StartNew()
+            $lastReport = [Diagnostics.Stopwatch]::StartNew()
+            while (($read = $source.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                $file.Write($buffer, 0, $read)
+                $received += $read
+                if ($lastReport.ElapsedMilliseconds -ge 150 -or ($total -gt 0 -and $received -ge $total)) {
+                    $lastReport.Restart()
+                    $percent = if ($total -gt 0) { [math]::Min(100, [int](100.0 * $received / $total)) } else { 0 }
+                    $speed = if ($started.Elapsed.TotalSeconds -gt 0) { $received / 1MB / $started.Elapsed.TotalSeconds } else { 0 }
+                    $totalMb = if ($total -gt 0) { $total / 1MB } else { $received / 1MB }
+                    Write-Progress -Activity "Downloading $Name" `
+                        -Status ("{0:N1} / {1:N1} MB   {2:N1} MB/s" -f ($received / 1MB), $totalMb, $speed) `
+                        -PercentComplete $percent
+                }
+            }
+        } finally {
+            $file.Dispose()
+            $source.Dispose()
+            Write-Progress -Activity "Downloading $Name" -Completed
+        }
+    } finally {
+        $response.Close()
+    }
+}
+
+try {
+    $tag = Get-ReleaseTag -Requested $Version
+    if ($tag -eq 'latest') {
+        $zipUrl = "https://github.com/$Repository/releases/latest/download/$AssetName"
+        $shaUrl = "https://github.com/$Repository/releases/latest/download/$AssetName.sha256"
+    } else {
+        $zipUrl = "https://github.com/$Repository/releases/download/$tag/$AssetName"
+        $shaUrl = "https://github.com/$Repository/releases/download/$tag/$AssetName.sha256"
+    }
+
+    Write-Step "downloading $AssetName $tag"
+    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("tailscaleswitcher-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+    $tempZip = Join-Path $tempRoot $AssetName
+    Save-ReleaseAsset -Url $zipUrl -Destination $tempZip -Name $AssetName
+
+    $expected = $null
+    $tempSha = Join-Path $tempRoot "$AssetName.sha256"
+    try {
+        Invoke-WebRequest -Uri $shaUrl -OutFile $tempSha -UseBasicParsing -Headers $UserAgent
+        $shaBody = [IO.File]::ReadAllText($tempSha)
+        if ($shaBody -match '([0-9a-fA-F]{64})') {
+            $expected = $Matches[1].ToLowerInvariant()
+        }
+    } catch {
+        Write-Warning "checksum asset missing: $($_.Exception.Message)"
+    }
+
+    if ($expected) {
+        $actual = (Get-FileHash -Path $tempZip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+            throw "SHA-256 mismatch. Expected $expected, got $actual"
+        }
+        Write-Step 'SHA-256 verified'
+    } else {
+        Write-Warning 'release has no SHA-256 asset, skipping checksum verification'
+    }
+
+    $running = Get-Process -Name 'TailscaleSwitcher' -ErrorAction SilentlyContinue
+    if ($running) {
+        Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        throw "TailscaleSwitcher is running (pid $($running.Id -join ', ')). Close it and run the installer again."
+    }
+
+    if (-not (Test-Path -LiteralPath $InstallDir)) {
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    } else {
+        Get-ChildItem -LiteralPath $InstallDir -Force | ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Step "installing to $InstallDir"
+    Expand-Archive -LiteralPath $tempZip -DestinationPath $InstallDir -Force
+    Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+    $exe = Join-Path $InstallDir 'TailscaleSwitcher.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        $nested = Get-ChildItem -LiteralPath $InstallDir -Filter 'TailscaleSwitcher.exe' -Recurse | Select-Object -First 1
+        if ($nested) { $exe = $nested.FullName } else { throw "TailscaleSwitcher.exe was not found after extract" }
+    }
+
+    if (-not $NoPath) {
+        $separator = [IO.Path]::PathSeparator
+        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if (-not $userPath) { $userPath = '' }
+        $entries = @($userPath -split $separator | Where-Object { $_ -ne '' })
+        $normalized = $InstallDir.TrimEnd([IO.Path]::DirectorySeparatorChar)
+        $alreadyThere = $entries | Where-Object { $_.TrimEnd([IO.Path]::DirectorySeparatorChar) -ieq $normalized }
+
+        if (-not $alreadyThere) {
+            $newPath = ($entries + $InstallDir) -join $separator
+            [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+            Write-Step 'install directory added to the user PATH'
+            Write-Host '    new terminal windows will find TailscaleSwitcher right away' -ForegroundColor DarkGray
+        }
+
+        if (@($env:Path -split [regex]::Escape($separator)) -notcontains $InstallDir) {
+            $env:Path = $env:Path + $separator + $InstallDir
+        }
+    }
+
+    Install-TailscaleSwitcherShortcuts -Executable $exe -NoShortcut:$NoShortcut -DesktopShortcut:$DesktopShortcut
+
+    Write-Host ''
+    Write-Host "TailscaleSwitcher $tag installed: $exe" -ForegroundColor Green
+    Write-Host ''
+    Write-Host 'Launch:' -ForegroundColor White
+    Write-Host '  TailscaleSwitcher' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host "Docs: https://github.com/$Repository#readme" -ForegroundColor DarkGray
+} finally {
+    $ProgressPreference = $previousProgress
+}

@@ -1,0 +1,10 @@
+namespace TailscaleSwitcher.Update;
+
+internal sealed record ReleaseDescriptor(string Tag, ReleaseVersion Version, Uri PackageUrl, Uri ChecksumUrl);
+
+internal interface IReleaseSource
+{
+    Task<ReleaseDescriptor> ResolveAsync(string? tag, CancellationToken cancellationToken);
+    Task DownloadAsync(Uri address, string destinationPath, CancellationToken cancellationToken, Action<long, long?>? progress = null);
+    Task<string> ReadTextAsync(Uri address, CancellationToken cancellationToken);
+}
