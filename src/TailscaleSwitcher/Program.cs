@@ -2,28 +2,32 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Security.Principal;
 using System.Text.Json;
+using TailscaleSwitcher.Proxy;
 using TailscaleSwitcher.Update;
 
 // Tailscale Exit Node Switcher — Windows, интерактивное меню
 // Позволяет пустить весь интернет-трафик через другой комп в Tailnet (один внешний IP)
 
-// CLI: --help / --version / update [--check]  (как в TerminalV)
+try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+
+// CLI: --help / --version / update [--check] / proxy [on|off|toggle|status]  (как в TerminalV)
 if (args.Length > 0)
 {
     var first = args[0].ToLowerInvariant();
     if (first is "--help" or "-h" or "-?" or "help")
     {
-        Console.WriteLine($"TailscaleSwitcher {AppVersion.Informational}");
-        Console.WriteLine("Использование:");
-        Console.WriteLine("  TailscaleSwitcher                — интерактивное меню (Windows)");
-        Console.WriteLine("  TailscaleSwitcher update         — обновить из GitHub Releases");
-        Console.WriteLine("  TailscaleSwitcher update --check — проверить наличие обновления");
-        Console.WriteLine("  TailscaleSwitcher --version      — показать версию");
+        PrintHelp();
         return;
     }
     if (first is "--version" or "-v" or "version")
     {
         Console.WriteLine(AppVersion.Informational);
+        return;
+    }
+    if (first is "proxy" or "px" or "xeon-proxy")
+    {
+        var code = await HandleProxyCliAsync(args);
+        if (code != 0) Environment.Exit(code);
         return;
     }
     if (first == "update")
@@ -115,6 +119,24 @@ while (true)
     Console.ResetColor();
     if (prefs != null)
         Console.WriteLine($"  LAN доступ: {(prefs.ExitNodeAllowLANAccess ? "разрешен" : "запрещен")}   |   RouteAll: {prefs.RouteAll}");
+
+    if (OperatingSystem.IsWindows())
+    {
+        var px = XeonProxyService.GetState();
+        Console.Write("  Прокси (WinINET):  ");
+        if (px.Enabled && !string.IsNullOrWhiteSpace(px.Server))
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"включен -> {px.Server}");
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("выключен (напрямую)");
+        }
+        Console.ResetColor();
+    }
+
     Console.WriteLine(new string('─', 55));
     Console.WriteLine("  1) Показать статус (tailscale status)");
     Console.WriteLine("  2) Показать доступные exit-node");
@@ -124,6 +146,8 @@ while (true)
     Console.WriteLine("  6) Показать мой Tailscale IP");
     Console.WriteLine("  7) Открыть админку Tailnet в браузере");
     Console.WriteLine("  8) Авто-фикс Happ + exit-node (r1600 -> Happ -> xeon)");
+    Console.WriteLine("  9) Включить прокси через Xeon (Happ, без exit-node)");
+    Console.WriteLine(" 10) Выключить прокси через Xeon (прямой выход)");
     Console.WriteLine("  0) Выход");
     Console.WriteLine(new string('─', 55));
     Console.Write("  Выбери пункт > ");
@@ -139,6 +163,8 @@ while (true)
         case "6": ShowTailscaleIp(); break;
         case "7": OpenAdmin(); break;
         case "8": await AutoFixHappExitNodeAsync(); break;
+        case "9": await RunProxyActionAsync(ProxyAction.Enable); break;
+        case "10": await RunProxyActionAsync(ProxyAction.Disable); break;
         case "0": return;
         default:
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -352,34 +378,147 @@ async Task CheckPublicIpAsync()
 {
     Console.WriteLine();
     Console.WriteLine("Проверяю внешний IP (как тебя видит интернет)...");
-    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-    string? ip = null;
-    string[] urls = ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"];
-    foreach (var url in urls)
-    {
-        try
-        {
-            ip = (await http.GetStringAsync(url)).Trim();
-            if (!string.IsNullOrWhiteSpace(ip) && ip.Contains('.')) break;
-        }
-        catch { }
-    }
-    if (!string.IsNullOrWhiteSpace(ip))
+    var pxState = OperatingSystem.IsWindows() ? XeonProxyService.GetState() : new ProxyState(false, "", "");
+    var egress = await XeonProxyService.CheckEgressAsync(pxState, timeoutSeconds: 8);
+    if (egress != null)
     {
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine($"  Внешний IP: {ip}");
+        var extra = string.Join(", ", new[] { egress.City, egress.Country, egress.Org }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        Console.WriteLine(string.IsNullOrWhiteSpace(extra)
+            ? $"  Внешний IP: {egress.Ip}"
+            : $"  Внешний IP: {egress.Ip}  ({extra})");
         Console.ResetColor();
     }
     else
     {
-        Console.WriteLine("  Не удалось узнать IP (нет интернета?)");
+        Console.WriteLine("  Не удалось узнать IP (нет интернета или недоступен прокси?)");
     }
-    // показать prefs для понимания через кого идем
+    // показать prefs и системный прокси для понимания через кого идем
     var prefs = GetPrefs();
     if (prefs != null && !string.IsNullOrWhiteSpace(prefs.ExitNodeIP))
-        Console.WriteLine($"  Сейчас выход через exit-node: {prefs.ExitNodeIP}");
+        Console.WriteLine($"  Tailscale exit-node: {prefs.ExitNodeIP}");
     else
-        Console.WriteLine("  Сейчас прямой выход (без exit-node)");
+        Console.WriteLine("  Tailscale exit-node: не используется");
+
+    if (pxState.Enabled && !string.IsNullOrWhiteSpace(pxState.Server))
+        Console.WriteLine($"  Системный прокси:    включен -> {pxState.Server}");
+    else
+        Console.WriteLine("  Системный прокси:    выключен (напрямую)");
+}
+
+void PrintHelp()
+{
+    Console.WriteLine($"TailscaleSwitcher {AppVersion.Informational}");
+    Console.WriteLine("Использование:");
+    Console.WriteLine("  TailscaleSwitcher                — интерактивное меню (Windows)");
+    Console.WriteLine("  TailscaleSwitcher proxy [status] — статус системного прокси через Xeon (Happ)");
+    Console.WriteLine("  TailscaleSwitcher proxy on       — включить прокси через Xeon (192.168.1.5 / 100.119.48.15)");
+    Console.WriteLine("  TailscaleSwitcher proxy off      — выключить системный прокси (прямой выход)");
+    Console.WriteLine("  TailscaleSwitcher proxy toggle   — переключить прокси вкл/выкл");
+    Console.WriteLine("    Опции proxy: --server <host[:port]>  --force  --winhttp");
+    Console.WriteLine("  TailscaleSwitcher update         — обновить из GitHub Releases");
+    Console.WriteLine("  TailscaleSwitcher update --check — проверить наличие обновления");
+    Console.WriteLine("  TailscaleSwitcher --version      — показать версию");
+}
+
+async Task<int> HandleProxyCliAsync(string[] cliArgs)
+{
+    var opts = XeonProxyService.ParseCli(cliArgs);
+    if (opts.Error != null)
+    {
+        Console.Error.WriteLine($"Ошибка: {opts.Error}");
+        Console.Error.WriteLine("Справка: TailscaleSwitcher proxy --help");
+        return 1;
+    }
+
+    if (opts.Action == ProxyAction.Help)
+    {
+        PrintHelp();
+        return 0;
+    }
+
+    return await RunProxyActionAsync(opts.Action, opts.CustomServer, opts.Force, opts.AlsoWinHttp);
+}
+
+async Task<int> RunProxyActionAsync(ProxyAction action, string? customServer = null, bool force = false, bool alsoWinHttp = false)
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        Console.Error.WriteLine("Переключение системного прокси поддерживается только в Windows.");
+        return 1;
+    }
+
+    var current = XeonProxyService.GetState();
+    if (action == ProxyAction.Toggle)
+        action = current.Enabled ? ProxyAction.Disable : ProxyAction.Enable;
+
+    if (action == ProxyAction.Status)
+    {
+        Console.WriteLine($"Системный прокси: {(current.Enabled ? $"ВКЛЮЧЕН -> {current.Server}" : "ВЫКЛЮЧЕН (прямой выход)")}");
+        var (resolved, ok) = await XeonProxyService.ResolveEndpointAsync(customServer);
+        Console.WriteLine($"Доступность Xeon: {(ok ? $"доступен ({resolved})" : "недоступен (ни 192.168.1.5:10809, ни 100.119.48.15:10809)")}");
+        var egress = await XeonProxyService.CheckEgressAsync(current);
+        if (egress != null)
+        {
+            var loc = string.Join(", ", new[] { egress.City, egress.Country }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            Console.WriteLine(string.IsNullOrWhiteSpace(loc)
+                ? $"Внешний IP:       {egress.Ip}"
+                : $"Внешний IP:       {egress.Ip} ({loc})");
+        }
+        else
+        {
+            Console.WriteLine("Внешний IP:       не удалось проверить");
+        }
+        return 0;
+    }
+
+    if (action == ProxyAction.Enable)
+    {
+        var (endpoint, reachable) = await XeonProxyService.ResolveEndpointAsync(customServer);
+        if (!reachable && !force)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine($"❌ Прокси на Xeon не отвечает ({(customServer ?? "192.168.1.5:10809 / 100.119.48.15:10809")}).");
+            Console.ResetColor();
+            Console.Error.WriteLine("   Проверь, что xeon включен и на нем запущен Happ (или передай --force).");
+            return 2;
+        }
+
+        XeonProxyService.Enable(endpoint, alsoWinHttp: alsoWinHttp, isAdmin: IsAdmin());
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"✓ Прокси через Xeon включен -> {endpoint}");
+        Console.ResetColor();
+
+        var egress = await XeonProxyService.CheckEgressAsync(XeonProxyService.GetState());
+        if (egress != null)
+        {
+            var loc = string.Join(", ", new[] { egress.City, egress.Country }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            Console.WriteLine(string.IsNullOrWhiteSpace(loc)
+                ? $"  Внешний IP: {egress.Ip}"
+                : $"  Внешний IP: {egress.Ip} ({loc})");
+        }
+        return 0;
+    }
+
+    if (action == ProxyAction.Disable)
+    {
+        XeonProxyService.Disable(isAdmin: IsAdmin());
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("✓ Системный прокси выключен (прямой выход).");
+        Console.ResetColor();
+
+        var egress = await XeonProxyService.CheckEgressAsync(XeonProxyService.GetState());
+        if (egress != null)
+        {
+            var loc = string.Join(", ", new[] { egress.City, egress.Country }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            Console.WriteLine(string.IsNullOrWhiteSpace(loc)
+                ? $"  Внешний IP: {egress.Ip}"
+                : $"  Внешний IP: {egress.Ip} ({loc})");
+        }
+        return 0;
+    }
+
+    return 0;
 }
 
 void OpenAdmin()

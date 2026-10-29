@@ -44,6 +44,9 @@ TailscaleSwitcher
 5) Проверить внешний IP
 6) Показать мой Tailscale IP
 7) Открыть админку Tailnet
+8) Авто-фикс Happ + exit-node (r1600 -> Happ -> xeon)
+9) Включить прокси через Xeon (Happ, без exit-node)
+10) Выключить прокси через Xeon (прямой выход)
 ```
 
 Чтобы собрать пул exit-node:
@@ -52,13 +55,17 @@ TailscaleSwitcher
 2. Подтверди в админке https://login.tailscale.com/admin/machines → `Edit route settings` → `Use as exit node`
 3. На клиенте в TailscaleSwitcher выбери пункт 2/3.
 
-Для переключения нужен запуск **от имени Администратора** (`tailscale set` требует прав).
+Для переключения `exit-node` нужен запуск **от имени Администратора** (`tailscale set` требует прав). Переключение системного прокси через Xeon (`proxy on/off`) работает **без прав Администратора**.
 
 CLI:
 
 ```powershell
 TailscaleSwitcher --help          # справка
 TailscaleSwitcher --version       # версия (из InformationalVersion)
+TailscaleSwitcher proxy           # статус системного прокси, доступность Xeon и внешний IP
+TailscaleSwitcher proxy on        # включить прокси через Xeon (192.168.1.5:10809 -> fallback 100.119.48.15:10809)
+TailscaleSwitcher proxy off       # выключить системный прокси (прямой выход)
+TailscaleSwitcher proxy toggle    # переключить прокси вкл/выкл (удобно вешать на ярлык)
 TailscaleSwitcher update --check  # проверить обновление
 TailscaleSwitcher update          # скачать и установить из GitHub Releases
 ```
