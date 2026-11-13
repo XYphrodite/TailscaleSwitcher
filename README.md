@@ -109,6 +109,39 @@ dotnet run --project src/TailscaleSwitcher -- --help
 
 Результат: `artifacts/TailscaleSwitcher-win-x64.zip` + `.sha256` (артефакты не перезаписываются).
 
+## Маршрутизация приложений и адресов через другой ПК (`route` / `relay`)
+
+Пускает через клубный ПК только выбранные приложения (`chrome.exe`, путь к `.exe`) и адреса (домен с поддоменами, `full:host`, IP, CIDR). Остальной трафик идёт как обычно. Под капотом — [sing-box](https://github.com/SagerNet/sing-box) (скачивается при первом запуске, версия и SHA-256 зафиксированы в коде) + wintun.
+
+```
+moscow_enjoyer:  приложение -> sing-box TUN -> SOCKS5 (Tailscale, логин/пароль) ->
+клубный ПК:      relay (sing-box на Tailscale-IP) -> Happ HTTP-прокси 127.0.0.1:10809 -> интернет
+```
+
+**Клубный ПК (один раз):**
+
+```powershell
+TailscaleSwitcher relay init          # генерирует пароль, печатает команду для клиента
+TailscaleSwitcher relay firewall      # от Администратора: TCP-порт только из 100.64.0.0/10
+TailscaleSwitcher relay start         # от Администратора; sing-box стартует через Планировщик заданий (SYSTEM) и переживает закрытие терминала/ssh
+TailscaleSwitcher relay start --persist   # то же + автозапуск при загрузке Windows
+TailscaleSwitcher relay stop | status | uninstall
+```
+
+**moscow_enjoyer (от Администратора):**
+
+```powershell
+TailscaleSwitcher route profile add club --node 100.89.154.125 --port 1081 --user club --pass <пароль>
+TailscaleSwitcher route app add chrome.exe
+TailscaleSwitcher route host add example.com      # *.example.com, full:api.example.com, 1.2.3.4, 10.0.0.0/8
+TailscaleSwitcher route on                        # повторный вызов применяет изменения
+TailscaleSwitcher route off
+```
+
+Профилей может быть несколько (`route profile add/remove/use`, `route app|host add --profile <имя>`); приложения и адреса объединяются по «ИЛИ». DNS для доменов из списка резолвится через relay. Конфиги: `%APPDATA%\TailscaleSwitcher\routing.json`, логи и config sing-box: `%APPDATA%\TailscaleSwitcher\run\`. То же доступно в меню, пункт 11.
+
+Ограничения: relay отдаёт в Happ только TCP (UDP не проксируется); если на клиенте включён Happ в режиме TUN, возможны конфликты маршрутов — клиентская часть требует проверки на живой машине.
+
 ## Структура
 
 ```

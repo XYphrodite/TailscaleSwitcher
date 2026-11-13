@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Security.Principal;
 using System.Text.Json;
 using TailscaleSwitcher.Proxy;
+using TailscaleSwitcher.Routing;
 using TailscaleSwitcher.Update;
 
 // Tailscale Exit Node Switcher — Windows, интерактивное меню
@@ -27,6 +28,12 @@ if (args.Length > 0)
     if (first is "proxy" or "px" or "xeon-proxy")
     {
         var code = await HandleProxyCliAsync(args);
+        if (code != 0) Environment.Exit(code);
+        return;
+    }
+    if (first is "route" or "rt" or "relay")
+    {
+        var code = await new RoutingCli().RunAsync(args);
         if (code != 0) Environment.Exit(code);
         return;
     }
@@ -148,6 +155,7 @@ while (true)
     Console.WriteLine("  8) Авто-фикс Happ + exit-node (r1600 -> Happ -> xeon)");
     Console.WriteLine("  9) Включить прокси через Xeon (Happ, без exit-node)");
     Console.WriteLine(" 10) Выключить прокси через Xeon (прямой выход)");
+    Console.WriteLine(" 11) Маршрутизация приложений/адресов через другой ПК (route/relay)");
     Console.WriteLine("  0) Выход");
     Console.WriteLine(new string('─', 55));
     Console.Write("  Выбери пункт > ");
@@ -165,6 +173,7 @@ while (true)
         case "8": await AutoFixHappExitNodeAsync(); break;
         case "9": await RunProxyActionAsync(ProxyAction.Enable); break;
         case "10": await RunProxyActionAsync(ProxyAction.Disable); break;
+        case "11": await new RoutingCli().RunMenuAsync(); break;
         case "0": return;
         default:
             Console.ForegroundColor = ConsoleColor.Yellow;
@@ -416,6 +425,8 @@ void PrintHelp()
     Console.WriteLine("  TailscaleSwitcher proxy off      — выключить системный прокси (прямой выход)");
     Console.WriteLine("  TailscaleSwitcher proxy toggle   — переключить прокси вкл/выкл");
     Console.WriteLine("    Опции proxy: --server <host[:port]>  --force  --winhttp");
+    Console.WriteLine("  TailscaleSwitcher route [on|off|list|profile|app|host|config] — маршрутизация приложений/адресов (см. route --help)");
+    Console.WriteLine("  TailscaleSwitcher relay [init|start|stop|status|info|firewall] — серверная часть на клубном ПК");
     Console.WriteLine("  TailscaleSwitcher update         — обновить из GitHub Releases");
     Console.WriteLine("  TailscaleSwitcher update --check — проверить наличие обновления");
     Console.WriteLine("  TailscaleSwitcher --version      — показать версию");
