@@ -121,69 +121,117 @@ public static class SingBoxConfigBuilder
         return ep == null ? null : (type, ep.Value.Host, ep.Value.Port);
     }
 
+    /// <summary>Приложения и адреса, разобранные в категории sing-box.</summary>
+    private sealed class RuleSet
+    {
+        public List<string> DomainSuffix { get; } = [];
+        public List<string> Domain { get; } = [];
+        public List<string> Cidr { get; } = [];
+        public List<string> ProcessNames { get; } = [];
+        public List<string> ProcessPaths { get; } = [];
+
+        public bool HasDomains => DomainSuffix.Count > 0 || Domain.Count > 0;
+
+        public static RuleSet From(IEnumerable<string> hosts, IEnumerable<string> apps)
+        {
+            var rs = new RuleSet();
+            foreach (var h in hosts)
+            {
+                var r = HostRuleParser.Parse(h);
+                switch (r.Kind)
+                {
+                    case HostRuleKind.DomainSuffix: AddUnique(rs.DomainSuffix, r.Value); break;
+                    case HostRuleKind.Domain: AddUnique(rs.Domain, r.Value); break;
+                    case HostRuleKind.IpCidr: AddUnique(rs.Cidr, r.Value); break;
+                }
+            }
+            foreach (var app in apps)
+            {
+                var a = app.Trim();
+                if (a.Length == 0) continue;
+                AddUnique(a.Contains('\\') || a.Contains('/') ? rs.ProcessPaths : rs.ProcessNames, a);
+            }
+            return rs;
+        }
+
+        public void AddRules(JsonArray rules, string outbound)
+        {
+            if (ProcessNames.Count > 0)
+                rules.Add(new JsonObject { ["process_name"] = ToArray(ProcessNames), ["outbound"] = outbound });
+            if (ProcessPaths.Count > 0)
+                rules.Add(new JsonObject { ["process_path"] = ToArray(ProcessPaths), ["outbound"] = outbound });
+            if (DomainSuffix.Count > 0)
+                rules.Add(new JsonObject { ["domain_suffix"] = ToArray(DomainSuffix), ["outbound"] = outbound });
+            if (Domain.Count > 0)
+                rules.Add(new JsonObject { ["domain"] = ToArray(Domain), ["outbound"] = outbound });
+            if (Cidr.Count > 0)
+                rules.Add(new JsonObject { ["ip_cidr"] = ToArray(Cidr), ["outbound"] = outbound });
+        }
+
+        private static void AddUnique(List<string> list, string v)
+        {
+            if (!list.Contains(v, StringComparer.OrdinalIgnoreCase)) list.Add(v);
+        }
+    }
+
+    /// <summary>Процессы Tailscale и самого sing-box не заворачиваем: иначе туннель зависит сам от себя.</summary>
+    public static readonly string[] AlwaysDirectProcesses =
+        ["tailscaled.exe", "tailscale-ipn.exe", "tailscale.exe", "sing-box.exe"];
+
     public static string BuildClient(RouteProfile profile, string? logFile = null)
     {
-        var domainSuffix = new List<string>();
-        var domains = new List<string>();
-        var cidrs = new List<string>();
-        foreach (var h in profile.Hosts)
-        {
-            var r = HostRuleParser.Parse(h);
-            switch (r.Kind)
-            {
-                case HostRuleKind.DomainSuffix: if (!domainSuffix.Contains(r.Value)) domainSuffix.Add(r.Value); break;
-                case HostRuleKind.Domain: if (!domains.Contains(r.Value)) domains.Add(r.Value); break;
-                case HostRuleKind.IpCidr: if (!cidrs.Contains(r.Value)) cidrs.Add(r.Value); break;
-            }
-        }
-
-        var processNames = new List<string>();
-        var processPaths = new List<string>();
-        foreach (var app in profile.Apps)
-        {
-            var a = app.Trim();
-            if (a.Length == 0) continue;
-            if (a.Contains('\\') || a.Contains('/'))
-            {
-                if (!processPaths.Contains(a, StringComparer.OrdinalIgnoreCase)) processPaths.Add(a);
-            }
-            else
-            {
-                if (!processNames.Contains(a, StringComparer.OrdinalIgnoreCase)) processNames.Add(a);
-            }
-        }
-
         var rules = new JsonArray
         {
             new JsonObject { ["action"] = "sniff" },
             new JsonObject { ["protocol"] = "dns", ["action"] = "hijack-dns" }
         };
-        if (processNames.Count > 0)
-            rules.Add(new JsonObject { ["process_name"] = ToArray(processNames), ["outbound"] = "club" });
-        if (processPaths.Count > 0)
-            rules.Add(new JsonObject { ["process_path"] = ToArray(processPaths), ["outbound"] = "club" });
-        if (domainSuffix.Count > 0)
-            rules.Add(new JsonObject { ["domain_suffix"] = ToArray(domainSuffix), ["outbound"] = "club" });
-        if (domains.Count > 0)
-            rules.Add(new JsonObject { ["domain"] = ToArray(domains), ["outbound"] = "club" });
-        if (cidrs.Count > 0)
-            rules.Add(new JsonObject { ["ip_cidr"] = ToArray(cidrs), ["outbound"] = "club" });
 
         var dnsServers = new JsonArray { new JsonObject { ["type"] = "local", ["tag"] = "local" } };
-        var dns = new JsonObject { ["servers"] = dnsServers, ["final"] = "local" };
-        if (profile.RemoteDns && (domainSuffix.Count > 0 || domains.Count > 0))
+        var dns = new JsonObject { ["servers"] = dnsServers };
+        var remoteDns = new JsonObject
         {
-            dnsServers.Add(new JsonObject
+            ["type"] = "tcp",
+            ["tag"] = "remote",
+            ["server"] = string.IsNullOrWhiteSpace(profile.DnsServer) ? "1.1.1.1" : profile.DnsServer,
+            ["detour"] = "club"
+        };
+
+        string routeFinal;
+        if (profile.AllTraffic)
+        {
+            // Весь трафик -> club; напрямую только Tailscale, локальная сеть и исключения.
+            rules.Add(new JsonObject { ["process_name"] = ToArray(AlwaysDirectProcesses), ["outbound"] = "direct" });
+            var bypass = RuleSet.From(profile.BypassHosts, profile.BypassApps);
+            bypass.AddRules(rules, "direct");
+            rules.Add(new JsonObject { ["ip_is_private"] = true, ["outbound"] = "direct" });
+            // QUIC через TCP-only relay не заработает: пусть браузер сразу откатится на TCP
+            rules.Add(new JsonObject { ["network"] = "udp", ["port"] = 443, ["action"] = "reject" });
+            routeFinal = "club";
+
+            dnsServers.Add(remoteDns);
+            var localDomains = new JsonArray();
+            localDomains.Add("ts.net");
+            foreach (var d in bypass.DomainSuffix) localDomains.Add(d);
+            var localRule = new JsonObject { ["action"] = "route", ["server"] = "local", ["domain_suffix"] = localDomains };
+            if (bypass.Domain.Count > 0) localRule["domain"] = ToArray(bypass.Domain);
+            dns["rules"] = new JsonArray { localRule };
+            dns["final"] = profile.RemoteDns ? "remote" : "local";
+        }
+        else
+        {
+            var include = RuleSet.From(profile.Hosts, profile.Apps);
+            include.AddRules(rules, "club");
+            routeFinal = "direct";
+
+            dns["final"] = "local";
+            if (profile.RemoteDns && include.HasDomains)
             {
-                ["type"] = "tcp",
-                ["tag"] = "remote",
-                ["server"] = string.IsNullOrWhiteSpace(profile.DnsServer) ? "1.1.1.1" : profile.DnsServer,
-                ["detour"] = "club"
-            });
-            var dnsRule = new JsonObject { ["action"] = "route", ["server"] = "remote" };
-            if (domainSuffix.Count > 0) dnsRule["domain_suffix"] = ToArray(domainSuffix);
-            if (domains.Count > 0) dnsRule["domain"] = ToArray(domains);
-            dns["rules"] = new JsonArray { dnsRule };
+                dnsServers.Add(remoteDns);
+                var dnsRule = new JsonObject { ["action"] = "route", ["server"] = "remote" };
+                if (include.DomainSuffix.Count > 0) dnsRule["domain_suffix"] = ToArray(include.DomainSuffix);
+                if (include.Domain.Count > 0) dnsRule["domain"] = ToArray(include.Domain);
+                dns["rules"] = new JsonArray { dnsRule };
+            }
         }
 
         var club = new JsonObject
@@ -229,7 +277,7 @@ public static class SingBoxConfigBuilder
             ["route"] = new JsonObject
             {
                 ["rules"] = rules,
-                ["final"] = "direct",
+                ["final"] = routeFinal,
                 ["auto_detect_interface"] = true,
                 ["default_domain_resolver"] = "local"
             }

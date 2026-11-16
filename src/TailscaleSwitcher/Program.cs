@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Security.Principal;
 using System.Text.Json;
+using TailscaleSwitcher;
 using TailscaleSwitcher.Proxy;
 using TailscaleSwitcher.Routing;
 using TailscaleSwitcher.Update;
@@ -40,151 +41,234 @@ if (args.Length > 0)
     if (first == "update")
     {
         var checkOnly = args.Any(a => a.Equals("--check", StringComparison.OrdinalIgnoreCase));
-        if (!AppVersion.CanSelfUpdate(Environment.ProcessPath))
-        {
-            Console.Error.WriteLine("Self-update доступен только для установленной копии (не из bin/).");
-            Environment.Exit(1);
-        }
-        try
-        {
-            using var source = new GitHubReleaseSource();
-            var svc = new SelfUpdateService(Environment.ProcessPath!, AppVersion.Current, source);
-            if (checkOnly)
-            {
-                var rep = svc.CheckAsync(CancellationToken.None).GetAwaiter().GetResult();
-                if (rep.Status == SelfUpdateStatus.AlreadyCurrent) Console.WriteLine($"TailscaleSwitcher {rep.Installed} уже актуален.");
-                else Console.WriteLine($"Доступно обновление: {rep.Installed} -> {rep.Release} ({rep.Tag}). Запусти 'TailscaleSwitcher update'.");
-                return;
-            }
-            Console.WriteLine($"TailscaleSwitcher {AppVersion.Informational}. Проверка GitHub Releases...");
-            var report = svc.ApplyAsync(CancellationToken.None, (recv, total) =>
-            {
-                var pct = total is > 0 ? (int)(100.0 * recv / total.Value) : 0;
-                Console.Write($"\r  {pct,3}%  {recv / 1048576.0:0.0}/{ (total ?? recv) / 1048576.0:0.0} MB   ");
-            }).GetAwaiter().GetResult();
-            if (report.Status == SelfUpdateStatus.AlreadyCurrent) Console.WriteLine($"Уже актуален: {report.Installed}");
-            else Console.WriteLine($"\nУстановлено {report.Tag}. Перезапусти приложение.");
-            return;
-        }
-        catch (Exception ex) { Console.Error.WriteLine(ex.Message); Environment.Exit(1); }
+        var code = await RunUpdateAsync(checkOnly);
+        if (code != 0) Environment.Exit(code);
+        return;
     }
 }
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-Console.Title = "Tailscale Exit Node Switcher";
-
-if (!IsAdmin())
-{
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.WriteLine("⚠  Запусти от имени Администратора, иначе переключение exit-node не сработает.");
-    Console.WriteLine("   Правый клик по .exe -> Запуск от имени администратора");
-    Console.ResetColor();
-    Console.WriteLine();
-}
+Console.Title = "TailscaleSwitcher";
 
 var tailscaleExe = FindTailscaleExe();
 if (tailscaleExe == null)
 {
-    Console.ForegroundColor = ConsoleColor.Red;
-    Console.WriteLine("❌ Не найден tailscale.exe");
+    Ui.Err("❌ Не найден tailscale.exe");
     Console.WriteLine("   Проверь что Tailscale установлен и в PATH");
     Console.WriteLine(@"   Ожидается: C:\Program Files\Tailscale\tailscale.exe");
-    Console.ResetColor();
-    Console.WriteLine("Нажми Enter...");
-    Console.ReadLine();
+    Ui.Pause();
     return;
 }
 
-Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine($"✓ Найден Tailscale: {tailscaleExe}");
-Console.ResetColor();
+var routing = new RoutingCli();
+
+if (!IsAdmin())
+{
+    Console.WriteLine();
+    Ui.Warn("  Для включения маршрутизации, relay и переключения exit-node нужны права Администратора.");
+    if (Ui.Confirm("Перезапустить от имени Администратора?") && Ui.RelaunchAsAdmin())
+        return;
+}
 
 while (true)
 {
-    Console.WriteLine();
-    Console.WriteLine(new string('═', 55));
-    Console.ForegroundColor = ConsoleColor.White;
-    Console.WriteLine("  Tailscale Exit Node Switcher (Windows)");
-    Console.ResetColor();
-    Console.WriteLine(new string('═', 55));
-
-    // быстрый статус в шапке
+    Ui.Clear();
+    var isAdmin = IsAdmin();
     var prefs = GetPrefs();
-    var currentExit = prefs?.ExitNodeIP;
-    var hasExit = !string.IsNullOrWhiteSpace(currentExit);
-    Console.Write("  Текущий exit-node: ");
-    if (hasExit)
-    {
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"{currentExit} (ID: {prefs!.ExitNodeID})");
-    }
+    var routeCfg = new RoutingConfigStore().Load();
+    var routeProfile = routeCfg.FindActiveOrOnly();
+    var routeState = RoutingCli.ClientStatus();
+
+    Ui.Title($"TailscaleSwitcher {AppVersion.Informational}");
+    if (routeState.Running && routeProfile != null)
+        Ui.Status("Маршрутизация:", $"ВКЛЮЧЕНА → {routeProfile.Name} ({RoutingCli.ModeName(routeProfile)})", ConsoleColor.Green);
+    else if (routeState.Running)
+        Ui.Status("Маршрутизация:", "ВКЛЮЧЕНА", ConsoleColor.Green);
     else
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("не используется (прямой выход в инет)");
-    }
-    Console.ResetColor();
-    if (prefs != null)
-        Console.WriteLine($"  LAN доступ: {(prefs.ExitNodeAllowLANAccess ? "разрешен" : "запрещен")}   |   RouteAll: {prefs.RouteAll}");
+        Ui.Status("Маршрутизация:", "выключена", ConsoleColor.DarkGray);
+
+    if (!string.IsNullOrWhiteSpace(prefs?.ExitNodeIP))
+        Ui.Status("Exit-node:", prefs!.ExitNodeIP, ConsoleColor.Green);
+    else
+        Ui.Status("Exit-node:", "не используется", ConsoleColor.DarkGray);
 
     if (OperatingSystem.IsWindows())
     {
         var px = XeonProxyService.GetState();
-        Console.Write("  Прокси (WinINET):  ");
         if (px.Enabled && !string.IsNullOrWhiteSpace(px.Server))
-        {
-            Console.ForegroundColor = ConsoleColor.Green;
-            Console.WriteLine($"включен -> {px.Server}");
-        }
+            Ui.Status("Системный прокси:", px.Server, ConsoleColor.Green);
         else
-        {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("выключен (напрямую)");
-        }
-        Console.ResetColor();
+            Ui.Status("Системный прокси:", "выключен", ConsoleColor.DarkGray);
     }
+    if (isAdmin) Ui.Status("Права:", "Администратор", ConsoleColor.Green, dot: false);
+    else Ui.Status("Права:", "обычный пользователь (часть функций недоступна)", ConsoleColor.Yellow, dot: false);
 
-    Console.WriteLine(new string('─', 55));
-    Console.WriteLine("  1) Показать статус (tailscale status)");
-    Console.WriteLine("  2) Показать доступные exit-node");
-    Console.WriteLine("  3) Подключиться через exit-node");
-    Console.WriteLine("  4) Отключиться от exit-node (вернуть прямой выход)");
-    Console.WriteLine("  5) Проверить внешний IP (мой IP в инете)");
-    Console.WriteLine("  6) Показать мой Tailscale IP");
-    Console.WriteLine("  7) Открыть админку Tailnet в браузере");
-    Console.WriteLine("  8) Авто-фикс Happ + exit-node (r1600 -> Happ -> xeon)");
-    Console.WriteLine("  9) Включить прокси через Xeon (Happ, без exit-node)");
-    Console.WriteLine(" 10) Выключить прокси через Xeon (прямой выход)");
-    Console.WriteLine(" 11) Маршрутизация приложений/адресов через другой ПК (route/relay)");
-    Console.WriteLine("  0) Выход");
-    Console.WriteLine(new string('─', 55));
-    Console.Write("  Выбери пункт > ");
-    var choice = Console.ReadLine()?.Trim();
+    Ui.Rule();
+    Ui.Item("1", "Маршрутизация через другой ПК", "весь трафик или выбранные приложения/адреса");
+    Ui.Item("2", "Этот компьютер как выходной ПК", "relay");
+    Ui.Item("3", "Tailscale exit-node");
+    Ui.Item("4", "Системный прокси через Xeon", "Happ");
+    Ui.Item("5", "Мой внешний IP");
+    Ui.Item("6", "Обновление приложения");
+    if (!isAdmin) Ui.Item("a", "Перезапустить от имени Администратора");
+    Ui.Item("0", "Выход");
+    Ui.Rule();
 
+    var choice = Ui.Prompt().ToLowerInvariant();
     switch (choice)
     {
-        case "1": ShowStatus(); break;
-        case "2": ShowExitNodes(); break;
-        case "3": ConnectExitNode(); break;
-        case "4": DisconnectExitNode(); break;
-        case "5": await CheckPublicIpAsync(); break;
-        case "6": ShowTailscaleIp(); break;
-        case "7": OpenAdmin(); break;
-        case "8": await AutoFixHappExitNodeAsync(); break;
-        case "9": await RunProxyActionAsync(ProxyAction.Enable); break;
-        case "10": await RunProxyActionAsync(ProxyAction.Disable); break;
-        case "11": await new RoutingCli().RunMenuAsync(); break;
-        case "0": return;
+        case "1": await routing.RunMenuAsync(); break;
+        case "2": await routing.RunRelayMenuAsync(); break;
+        case "3": await ExitNodeMenuAsync(); break;
+        case "4": await ProxyMenuAsync(); break;
+        case "5":
+            Console.WriteLine();
+            await CheckPublicIpAsync();
+            Ui.Pause();
+            break;
+        case "6":
+            Console.WriteLine();
+            await RunUpdateAsync(checkOnly: false, interactive: true);
+            Ui.Pause();
+            break;
+        case "a" when !isAdmin:
+            if (Ui.RelaunchAsAdmin()) return;
+            Ui.Warn("  Запуск от Администратора отменён.");
+            Ui.Pause();
+            break;
+        case "0":
+        case "q":
+            return;
+        case "":
+            break;
         default:
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine("  Неизвестный пункт.");
-            Console.ResetColor();
+            Ui.Warn("  Неизвестный пункт.");
+            Ui.Pause();
             break;
     }
-    Console.WriteLine();
-    Console.Write("Нажми Enter для меню...");
-    Console.ReadLine();
-    try { if (!Console.IsOutputRedirected) Console.Clear(); } catch { }
+}
+
+// ───────────── подменю ─────────────
+
+async Task ExitNodeMenuAsync()
+{
+    while (true)
+    {
+        Ui.Clear();
+        var prefs = GetPrefs();
+        Ui.Title("Tailscale exit-node");
+        if (!string.IsNullOrWhiteSpace(prefs?.ExitNodeIP))
+            Ui.Status("Текущий:", $"{prefs!.ExitNodeIP} (ID: {prefs.ExitNodeID})", ConsoleColor.Green);
+        else
+            Ui.Status("Текущий:", "не используется (прямой выход)", ConsoleColor.DarkGray);
+        if (prefs != null)
+            Ui.Dim($"    LAN доступ: {(prefs.ExitNodeAllowLANAccess ? "разрешён" : "запрещён")}   RouteAll: {prefs.RouteAll}");
+        Ui.Rule();
+        Ui.Item("1", "Подключиться через exit-node");
+        Ui.Item("2", "Отключиться (вернуть прямой выход)");
+        Ui.Item("3", "Доступные exit-node");
+        Ui.Item("4", "Статус Tailscale");
+        Ui.Item("5", "Мой Tailscale IP");
+        Ui.Item("6", "Авто-фикс Happ + exit-node", "r1600 → Happ → xeon");
+        Ui.Item("7", "Открыть админку Tailnet в браузере");
+        Ui.Item("0", "Назад");
+        Ui.Rule();
+
+        switch (Ui.Prompt())
+        {
+            case "1": ConnectExitNode(); break;
+            case "2": DisconnectExitNode(); break;
+            case "3": ShowExitNodes(); break;
+            case "4": ShowStatus(); break;
+            case "5": ShowTailscaleIp(); break;
+            case "6": await AutoFixHappExitNodeAsync(); break;
+            case "7": OpenAdmin(); break;
+            case "0":
+            case "":
+                return;
+            default:
+                Ui.Warn("  Неизвестный пункт.");
+                break;
+        }
+        Ui.Pause();
+    }
+}
+
+async Task ProxyMenuAsync()
+{
+    while (true)
+    {
+        Ui.Clear();
+        Ui.Title("Системный прокси через Xeon (Happ)");
+        if (OperatingSystem.IsWindows())
+        {
+            var px = XeonProxyService.GetState();
+            if (px.Enabled && !string.IsNullOrWhiteSpace(px.Server))
+                Ui.Status("Сейчас:", $"включён → {px.Server}", ConsoleColor.Green);
+            else
+                Ui.Status("Сейчас:", "выключен (напрямую)", ConsoleColor.DarkGray);
+        }
+        Ui.Rule();
+        Ui.Item("1", "Включить прокси через Xeon");
+        Ui.Item("2", "Выключить прокси (прямой выход)");
+        Ui.Item("3", "Статус и проверка доступности");
+        Ui.Item("0", "Назад");
+        Ui.Rule();
+
+        switch (Ui.Prompt())
+        {
+            case "1": Console.WriteLine(); await RunProxyActionAsync(ProxyAction.Enable); break;
+            case "2": Console.WriteLine(); await RunProxyActionAsync(ProxyAction.Disable); break;
+            case "3": Console.WriteLine(); await RunProxyActionAsync(ProxyAction.Status); break;
+            case "0":
+            case "":
+                return;
+            default:
+                Ui.Warn("  Неизвестный пункт.");
+                break;
+        }
+        Ui.Pause();
+    }
+}
+
+async Task<int> RunUpdateAsync(bool checkOnly, bool interactive = false)
+{
+    if (!AppVersion.CanSelfUpdate(Environment.ProcessPath))
+    {
+        Console.Error.WriteLine("Self-update доступен только для установленной копии (не из bin/).");
+        return 1;
+    }
+    try
+    {
+        using var source = new GitHubReleaseSource();
+        var svc = new SelfUpdateService(Environment.ProcessPath!, AppVersion.Current, source);
+        if (checkOnly || interactive)
+        {
+            var rep = await svc.CheckAsync(CancellationToken.None);
+            if (rep.Status == SelfUpdateStatus.AlreadyCurrent)
+            {
+                Console.WriteLine($"TailscaleSwitcher {rep.Installed} уже актуален.");
+                return 0;
+            }
+            Console.WriteLine($"Доступно обновление: {rep.Installed} -> {rep.Release} ({rep.Tag}).");
+            if (checkOnly)
+            {
+                Console.WriteLine("Запусти 'TailscaleSwitcher update'.");
+                return 0;
+            }
+            if (!Ui.Confirm("Установить сейчас?")) return 0;
+        }
+        Console.WriteLine($"TailscaleSwitcher {AppVersion.Informational}. Проверка GitHub Releases...");
+        var report = await svc.ApplyAsync(CancellationToken.None, (recv, total) =>
+        {
+            var pct = total is > 0 ? (int)(100.0 * recv / total.Value) : 0;
+            Console.Write($"\r  {pct,3}%  {recv / 1048576.0:0.0}/{(total ?? recv) / 1048576.0:0.0} MB   ");
+        });
+        if (report.Status == SelfUpdateStatus.AlreadyCurrent) Console.WriteLine($"Уже актуален: {report.Installed}");
+        else Console.WriteLine($"\nУстановлено {report.Tag}. Перезапусти приложение.");
+        return 0;
+    }
+    catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 1; }
 }
 
 // ───────────────── helpers ─────────────────

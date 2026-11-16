@@ -28,7 +28,8 @@ public sealed partial class RoutingCli
                     Password = a.Get("--pass") ?? "",
                     TailscaleInterface = a.Get("--iface") ?? "Tailscale",
                     DnsServer = a.Get("--dns") ?? "1.1.1.1",
-                    RemoteDns = !a.Has("--no-remote-dns")
+                    RemoteDns = !a.Has("--no-remote-dns"),
+                    AllTraffic = a.Has("--all")
                 };
                 cfg.Profiles.Add(p);
                 cfg.Active ??= p.Name;
@@ -60,11 +61,11 @@ public sealed partial class RoutingCli
         }
     }
 
-    private int RouteListEdit(RoutingConfig cfg, List<string> rest, CliArgs a, bool isApp)
+    private int RouteListEdit(RoutingConfig cfg, List<string> rest, CliArgs a, bool isApp, bool bypass = false)
     {
         var action = rest.FirstOrDefault()?.ToLowerInvariant();
         var value = rest.Skip(1).FirstOrDefault();
-        var kind = isApp ? "app" : "host";
+        var kind = (bypass ? "bypass " : "") + (isApp ? "app" : "host");
         if (action is not ("add" or "remove") || string.IsNullOrWhiteSpace(value))
             return Fail($"Использование: route {kind} add|remove <значение> [--profile имя]");
 
@@ -72,7 +73,9 @@ public sealed partial class RoutingCli
         if (profile == null) return Fail("Профиль не найден. Создай: route profile add ... или укажи --profile.");
 
         value = value.Trim().Trim('"');
-        List<string> list = isApp ? profile.Apps : profile.Hosts;
+        List<string> list = bypass
+            ? (isApp ? profile.BypassApps : profile.BypassHosts)
+            : (isApp ? profile.Apps : profile.Hosts);
 
         if (!isApp)
         {

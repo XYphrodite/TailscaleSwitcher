@@ -131,6 +131,12 @@ public sealed class SingBoxRunner
     /// <summary>PID sing-box, запущенных с конфигом этой роли (по командной строке).</summary>
     private List<int> FindPids()
     {
+        // быстрый выход: sing-box вообще не запущен (частый случай, не гоняем PowerShell)
+        var any = Process.GetProcessesByName("sing-box");
+        var count = any.Length;
+        foreach (var p in any) p.Dispose();
+        if (count == 0) return [];
+
         var needle = ConfigPath.Replace("'", "''");
         var script = "Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | " +
                      $"Where-Object {{ $_.CommandLine -like '*{needle}*' }} | ForEach-Object {{ $_.ProcessId }}";

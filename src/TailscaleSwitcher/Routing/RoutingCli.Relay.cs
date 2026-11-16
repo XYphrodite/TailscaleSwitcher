@@ -105,14 +105,16 @@ public sealed partial class RoutingCli
         return 0;
     }
 
+    private static string FindTailscalePath() => new[]
+    {
+        @"C:\Program Files\Tailscale\tailscale.exe",
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tailscale", "tailscale.exe")
+    }.FirstOrDefault(File.Exists) ?? "tailscale";
+
     private static string? ResolveListenAddress(RelaySettings r)
     {
         if (!string.IsNullOrWhiteSpace(r.Listen)) return r.Listen;
-        var exe = new[]
-        {
-            @"C:\Program Files\Tailscale\tailscale.exe",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tailscale", "tailscale.exe")
-        }.FirstOrDefault(File.Exists) ?? "tailscale";
+        var exe = FindTailscalePath();
         var (ok, output) = RunProcess(exe, "ip -4");
         if (!ok) return null;
         var ip = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();

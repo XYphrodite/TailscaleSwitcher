@@ -71,6 +71,66 @@ public class RoutingTests
     }
 
     [Fact]
+    public void BuildClient_AllTraffic_RoutesEverythingExceptTailscaleLanAndBypass()
+    {
+        var p = Profile();
+        p.AllTraffic = true;
+        p.BypassApps = ["steam.exe"];
+        p.BypassHosts = ["bank.ru", "192.0.2.0/24"];
+        var root = JsonNode.Parse(SingBoxConfigBuilder.BuildClient(p))!;
+
+        Assert.Equal("club", root["route"]!["final"]!.GetValue<string>());
+        var rules = root["route"]!["rules"]!.AsArray();
+
+        var direct = rules.Where(r => r!["outbound"]?.GetValue<string>() == "direct").ToList();
+        var procs = direct.SelectMany(r => r!["process_name"]?.AsArray().Select(x => x!.GetValue<string>()) ?? []).ToList();
+        Assert.Contains("tailscaled.exe", procs);
+        Assert.Contains("sing-box.exe", procs);
+        Assert.Contains("steam.exe", procs);
+        Assert.Contains(direct, r => r!["domain_suffix"]?[0]?.GetValue<string>() == "bank.ru");
+        Assert.Contains(direct, r => r!["ip_cidr"]?[0]?.GetValue<string>() == "192.0.2.0/24");
+        Assert.Contains(direct, r => r!["ip_is_private"]?.GetValue<bool>() == true);
+
+        // правила «через узел» из Apps/Hosts в этом режиме не применяются
+        Assert.DoesNotContain(rules, r => r!["outbound"]?.GetValue<string>() == "club");
+
+        Assert.Equal("remote", root["dns"]!["final"]!.GetValue<string>());
+        var localSuffixes = root["dns"]!["rules"]![0]!["domain_suffix"]!.AsArray().Select(x => x!.GetValue<string>()).ToList();
+        Assert.Contains("ts.net", localSuffixes);
+        Assert.Contains("bank.ru", localSuffixes);
+    }
+
+    [Fact]
+    public async Task Cli_ModeAndBypassCommands()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tss-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new RoutingConfigStore(Path.Combine(dir, "routing.json"));
+            var cli = new RoutingCli(store, new StringWriter(), new StringWriter());
+
+            Assert.Equal(0, await cli.RunAsync(["route", "profile", "add", "club", "--node", "100.89.154.125", "--all"]));
+            Assert.True(store.Load().Profiles[0].AllTraffic);
+
+            Assert.Equal(0, await cli.RunAsync(["route", "bypass", "app", "add", "steam.exe"]));
+            Assert.Equal(0, await cli.RunAsync(["route", "bypass", "host", "add", "bank.ru"]));
+            Assert.Equal(1, await cli.RunAsync(["route", "bypass", "host", "add", "nodots"]));
+            var prof = store.Load().Profiles[0];
+            Assert.Equal(["steam.exe"], prof.BypassApps);
+            Assert.Equal(["bank.ru"], prof.BypassHosts);
+            Assert.Empty(prof.Apps);
+
+            Assert.Equal(0, await cli.RunAsync(["route", "mode", "selective"]));
+            Assert.False(store.Load().Profiles[0].AllTraffic);
+            Assert.Equal(1, await cli.RunAsync(["route", "mode", "weird"]));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void BuildClient_RemoteDnsOnlyForDomainRules()
     {
         var p = Profile();

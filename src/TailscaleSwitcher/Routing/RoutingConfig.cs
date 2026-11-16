@@ -19,6 +19,14 @@ public sealed class RouteProfile
     public List<string> Apps { get; set; } = [];
     /// <summary>Адреса: домен (с поддоменами), "full:host", IP, CIDR.</summary>
     public List<string> Hosts { get; set; } = [];
+    /// <summary>
+    /// true — через узел идёт ВЕСЬ трафик (кроме Tailscale, локальной сети и исключений Bypass*).
+    /// false — только приложения и адреса из Apps/Hosts.
+    /// </summary>
+    public bool AllTraffic { get; set; }
+    /// <summary>Исключения для режима AllTraffic: эти приложения/адреса идут напрямую.</summary>
+    public List<string> BypassApps { get; set; } = [];
+    public List<string> BypassHosts { get; set; } = [];
     /// <summary>Резолвить домены из списка Hosts через relay (без DNS-утечки).</summary>
     public bool RemoteDns { get; set; } = true;
     public string DnsServer { get; set; } = "1.1.1.1";

@@ -309,6 +309,17 @@ public static class XeonProxyService
         }
     }
 
+    /// <summary>Включает/выключает системный прокси, не трогая сохранённые ProxyServer/ProxyOverride.</summary>
+    [SupportedOSPlatform("windows")]
+    public static void SetEnabled(bool enabled)
+    {
+        using (var key = Registry.CurrentUser.CreateSubKey(InternetSettingsKeyPath, writable: true))
+        {
+            key.SetValue("ProxyEnable", enabled ? 1 : 0, RegistryValueKind.DWord);
+        }
+        NotifyWinInet();
+    }
+
     [SupportedOSPlatform("windows")]
     public static void Disable(bool isAdmin)
     {
