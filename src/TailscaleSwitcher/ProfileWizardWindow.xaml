@@ -16,7 +16,7 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="0,0,0,14">
-            <TextBlock Text="НОВЫЙ ПРОФИЛЬ ВЫХОДНОГО УЗЛА" Foreground="#61E8BA" FontSize="11" FontWeight="Bold"/>
+            <TextBlock x:Name="WizardTitle" Text="НОВЫЙ ПРОФИЛЬ ВЫХОДНОГО УЗЛА" Foreground="#61E8BA" FontSize="11" FontWeight="Bold"/>
             <TextBlock Text="Настройка подключения к другому ПК" FontSize="20" FontWeight="SemiBold" Margin="0,4,0,4"/>
             <TextBlock Text="На выходном ПК открой вкладку «Этот ПК (Relay)» и скопируй команду подключения — или выбери ПК из сети Tailnet."
                        Foreground="#929FB4" FontSize="12" TextWrapping="Wrap"/>

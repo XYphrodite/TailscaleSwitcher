@@ -11,16 +11,31 @@ public partial class ProfileWizardWindow : Window
 {
     private readonly List<TailnetPeerInfo> _peers;
     private readonly HashSet<string> _existingNames;
+    private readonly RouteProfile? _editing;
     private bool _suppressImport;
 
     public RouteProfile? CreatedProfile { get; private set; }
 
-    public ProfileWizardWindow(IEnumerable<string> existingProfileNames, IReadOnlyList<TailnetPeerInfo>? peers = null)
+    public ProfileWizardWindow(IEnumerable<string> existingProfileNames, IReadOnlyList<TailnetPeerInfo>? peers = null, RouteProfile? editing = null)
     {
         _existingNames = new HashSet<string>(existingProfileNames, StringComparer.OrdinalIgnoreCase);
         _peers = (peers ?? []).ToList();
+        _editing = editing;
 
         InitializeComponent();
+
+        if (_editing != null)
+        {
+            Title = "Изменение профиля";
+            WizardTitle.Text = "ИЗМЕНЕНИЕ ПРОФИЛЯ";
+            NameBox.Text = _editing.Name;
+            NodeBox.Text = _editing.Node;
+            PortBox.Text = _editing.Port.ToString();
+            UserBox.Text = _editing.Username;
+            PassBox.Text = _editing.Password;
+            ModeAllRadio.IsChecked = _editing.AllTraffic;
+            ModeSelectiveRadio.IsChecked = !_editing.AllTraffic;
+        }
 
         if (_peers.Count == 0)
         {
@@ -170,15 +185,14 @@ public partial class ProfileWizardWindow : Window
             return;
         }
 
-        CreatedProfile = new RouteProfile
-        {
-            Name = name,
-            Node = node,
-            Port = port,
-            Username = user,
-            Password = pass,
-            AllTraffic = ModeAllRadio.IsChecked == true
-        };
+        var target = _editing ?? new RouteProfile();
+        target.Name = name;
+        target.Node = node;
+        target.Port = port;
+        target.Username = user;
+        target.Password = pass;
+        target.AllTraffic = ModeAllRadio.IsChecked == true;
+        CreatedProfile = target;
         DialogResult = true;
     }
 

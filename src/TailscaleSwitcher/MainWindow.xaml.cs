@@ -202,6 +202,30 @@ public partial class MainWindow : Window
         AppendLog($"Создан профиль «{wizard.CreatedProfile.Name}» → {wizard.CreatedProfile.Node}:{wizard.CreatedProfile.Port}.");
     }
 
+    private async void OnProfileEditClick(object sender, RoutedEventArgs e)
+    {
+        var profile = ActiveProfile();
+        if (profile == null) { SetStatus("Нет профиля для изменения."); return; }
+        var wasActive = string.Equals(_cfg.Active, profile.Name, StringComparison.OrdinalIgnoreCase);
+        SetBusy(true);
+        List<TailnetPeerInfo> peers;
+        try { peers = await Task.Run(() => TailscaleService.GetTailnetPeers()); }
+        finally { SetBusy(false); }
+
+        var otherNames = _cfg.Profiles
+            .Select(p => p.Name)
+            .Where(n => !string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var wizard = new ProfileWizardWindow(otherNames, peers, editing: profile) { Owner = this };
+        if (wizard.ShowDialog() != true) return;
+        if (wasActive) _cfg.Active = profile.Name;
+        SaveCfg();
+        FillRoutingTab();
+        SetStatus($"Профиль «{profile.Name}» сохранён." +
+            (RoutingCli.ClientStatus().Running ? " Маршрутизация включена — выключи и включи её снова, чтобы применилось." : ""));
+        AppendLog($"Профиль изменён: «{profile.Name}» → {profile.Node}:{profile.Port}, {RoutingCli.ModeName(profile)}.");
+    }
+
     private void OnProfileDeleteClick(object sender, RoutedEventArgs e)
     {
         var profile = ActiveProfile();

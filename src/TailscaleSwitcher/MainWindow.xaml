@@ -147,10 +147,12 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <ComboBox x:Name="ProfileCombo" Style="{StaticResource DarkComboBox}" SelectionChanged="OnProfileSelectionChanged"/>
-                                <Button Grid.Column="1" Content="Новый профиль" Style="{StaticResource PrimaryButton}" Click="OnProfileAddClick" Margin="8,0,0,0"/>
-                                <Button Grid.Column="2" Content="Удалить" Style="{StaticResource DangerButton}" Click="OnProfileDeleteClick" Margin="8,0,0,0"/>
+                                <Button Grid.Column="1" Content="Изменить" Style="{StaticResource SmallButton}" Click="OnProfileEditClick" Margin="8,0,0,0"/>
+                                <Button Grid.Column="2" Content="Новый профиль" Style="{StaticResource PrimaryButton}" Click="OnProfileAddClick" Margin="8,0,0,0"/>
+                                <Button Grid.Column="3" Content="Удалить" Style="{StaticResource DangerButton}" Click="OnProfileDeleteClick" Margin="8,0,0,0"/>
                             </Grid>
                             <TextBlock x:Name="ProfileInfoLabel" Text="Профилей пока нет — нажми «Новый профиль»." Foreground="#929FB4" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
