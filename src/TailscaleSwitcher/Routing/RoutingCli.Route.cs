@@ -9,6 +9,7 @@ public sealed partial class RoutingCli
     private static string ProxyRestoreMarker => Path.Combine(RoutingPaths.RunDir, "client.proxy-restore");
 
     public static RunnerStatus ClientStatus() => ClientRunner.GetStatus();
+    public static bool IsSystemProxySuspended() => File.Exists(ProxyRestoreMarker);
 
     private async Task<int> RouteAsync(CliArgs a)
     {

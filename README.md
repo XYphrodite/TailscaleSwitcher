@@ -1,6 +1,6 @@
 # TailscaleSwitcher
 
-Консольное приложение для Windows — весь интернет-трафик пускает через другой комп в Tailnet (один внешний IP). Интерактивное меню + self-update как в **TerminalV**.
+Графическое приложение для Windows (WPF, .NET 10) — весь интернет-трафик пускает через другой комп в Tailnet (один внешний IP). Тёмная тема как у **RemoteGuard**/**MiningSwitch**, CLI для скриптов и self-update.
 
 > Портировано с TerminalV: установка через `install.ps1`, публикация через `scripts/publish.ps1`, обновление через GitHub Releases с SHA-256 и атомарной заменой exe.
 
@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.
 
 Параметры: `-InstallDir` (по умолчанию `%LOCALAPPDATA%\Programs\TailscaleSwitcher`), `-Version` (`latest`), `-NoPath`, `-DesktopShortcut`, `-NoShortcut`.
 
-Ручная установка: скачай `TailscaleSwitcher-win-x64.zip` со [страницы релизов](https://github.com/XYphrodite/TailscaleSwitcher/releases) — self-contained, .NET ставить не нужно. Распакуй и запускай `TailscaleSwitcher.exe`.
+Ручная установка: скачай `TailscaleSwitcher-win-x64.zip` со [страницы релизов](https://github.com/XYphrodite/TailscaleSwitcher/releases) — лёгкая сборка без вшитого рантайма (~0.2 MB), нужен установленный .NET 10 Desktop Runtime (как у RemoteGuard/MiningSwitch). Распакуй и запускай `TailscaleSwitcher.exe`.
 
 После установки:
 
@@ -92,7 +92,7 @@ TailscaleSwitcher update          # скачать и установить из 
 
 ## Сборка из исходников
 
-Нужен .NET 8 SDK.
+Нужен .NET 10 SDK.
 
 ```powershell
 dotnet build
@@ -144,7 +144,7 @@ TailscaleSwitcher route off
 
 Конфиги: `%APPDATA%\TailscaleSwitcher\routing.json`, логи и config sing-box: `%APPDATA%\TailscaleSwitcher\run\`.
 
-**Меню.** Главное меню — статус сверху (маршрутизация, exit-node, системный прокси, права) и разделы: маршрутизация (включить/выключить, режим, приложения и адреса с выбором из запущенных программ, мастер профилей с выбором узла из tailnet), этот ПК как выходной (relay), exit-node, системный прокси, внешний IP, обновление. Если запущено без прав, предлагается перезапуск от имени Администратора.
+**Оболочка.** Запуск без аргументов открывает графическую оболочку (закрытие окна сворачивает в трей). Вкладки: **Обзор** (куда сейчас идёт трафик, внешний IP, быстрый «прямой выход»), **Маршрутизация** (профили с мастером и выбором узла из tailnet, режим, приложения и адреса с выбором из запущенных программ), **Exit-node**, **Этот ПК (Relay)** (запуск relay с автозапуском, firewall, команда для клиента), **Журнал**. Если запущено без прав, предлагается перезапуск от имени Администратора.
 
 Ограничения: relay отдаёт в Happ только TCP (UDP не проксируется); если на клиенте включён Happ в режиме TUN, возможны конфликты маршрутов — клиентская часть требует проверки на живой машине.
 
@@ -155,7 +155,9 @@ TailscaleSwitcher/
 ├── install.ps1                  # как в TerminalV, ASCII-only
 ├── scripts/publish.ps1          # dotnet publish win-x64 single-file → zip+sha
 ├── src/TailscaleSwitcher/
-│   ├── Program.cs               # интерактивное меню + CLI update
+│   ├── MainWindow.xaml(.cs)     # графическая оболочка (тёмная тема)
+│   ├── App.xaml(.cs)            # точка входа: GUI или CLI, трей, single-instance
+│   ├── TrayIcon.cs              # иконка в трее с быстрыми действиями
 │   └── Update/                  # GitHubReleaseSource, SelfUpdateService, ExecutableReplacer, AppVersion…
 ├── TailscaleSwitcher.slnx
 └── README.md

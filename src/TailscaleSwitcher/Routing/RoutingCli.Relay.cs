@@ -6,6 +6,17 @@ public sealed partial class RoutingCli
 {
     private static readonly SingBoxRunner RelayRunner = new("relay");
 
+    public static RunnerStatus RelayStatusSnapshot() => RelayRunner.GetStatus();
+    public static string RelayLogTail(int lines = 40) => RelayRunner.TailLog(lines);
+    public static string ClientLogTail(int lines = 40) => ClientRunner.TailLog(lines);
+    public static string? ResolveRelayListenAddress(RelaySettings r) => ResolveListenAddress(r);
+
+    public static string BuildClientConnectCommand(RelaySettings r, string? listen = null)
+    {
+        var ip = string.IsNullOrWhiteSpace(listen) ? (ResolveListenAddress(r) ?? "<ip>") : listen;
+        return $"TailscaleSwitcher route profile add club --node {ip} --port {r.Port} --user {r.Username} --pass {r.Password}";
+    }
+
     private async Task<int> RelayAsync(CliArgs a)
     {
         var sub = a.Positional.FirstOrDefault()?.ToLowerInvariant() ?? "status";

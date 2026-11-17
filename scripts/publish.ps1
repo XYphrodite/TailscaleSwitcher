@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Publish a self-contained win-x64 build and pack TailscaleSwitcher-win-x64.zip.
+    Publish a light framework-dependent win-x64 single-file build (без вшитого .NET Runtime)
+    and pack TailscaleSwitcher-win-x64.zip. На целевом ПК должен быть установлен .NET 10 Desktop Runtime.
 #>
 [CmdletBinding()]
 param(
@@ -38,10 +39,8 @@ Write-Host "==> publishing $project" -ForegroundColor Cyan
 dotnet publish $project `
     -c $Configuration `
     -r $Runtime `
-    --self-contained true `
+    --self-contained false `
     -p:PublishSingleFile=true `
-    -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true `
     -p:DebugType=none `
     -p:DebugSymbols=false `
     -o $outDir

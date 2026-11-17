@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Net.Http;
 using System.Security.Cryptography;
 using TailscaleSwitcher.Update;
 

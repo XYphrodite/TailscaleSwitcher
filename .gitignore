@@ -4,6 +4,8 @@ obj/
 *.user
 *.suo
 artifacts/
+artifacts-*/
+actionlint
 *.log
 verification-*/
 .publish-*/
