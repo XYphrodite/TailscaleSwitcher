@@ -115,7 +115,11 @@ public partial class MainWindow : Window
     private void OnAdminRestartClick(object sender, RoutedEventArgs e) =>
         ((App)Application.Current).RestartApplication(asAdmin: true, startInTray: false);
 
-    private async void OnRefreshClick(object sender, RoutedEventArgs e) => await RefreshAllAsync();
+    private async void OnRefreshClick(object sender, RoutedEventArgs e)
+    {
+        await RefreshAllAsync();
+        await UpdateCheckAsync(quiet: true);
+    }
 
     // ────────────────────────────────────────────── Вкладки
 
@@ -529,13 +533,13 @@ public partial class MainWindow : Window
 
     // ────────────────────────────────────────────── Обновления
 
-    private async void OnUpdateCheckClick(object sender, RoutedEventArgs e) => await UpdateCheckAsync();
-
-    private async Task UpdateCheckAsync()
+    private async Task UpdateCheckAsync(bool quiet = false)
     {
         if (!AppVersion.CanSelfUpdate(Environment.ProcessPath))
         {
-            SetStatus("Self-update доступен только для установленной копии (не из bin/).");
+            SetStatus(quiet
+                ? "Состояние обновлено."
+                : "Self-update доступен только для установленной копии (не из bin/).");
             return;
         }
         SetBusy(true);
@@ -544,7 +548,9 @@ public partial class MainWindow : Window
             var report = await AppUpdater.CheckAsync();
             if (report.Status == SelfUpdateStatus.AlreadyCurrent)
             {
-                SetStatus($"Уже актуален: {report.Installed}");
+                SetStatus(quiet
+                    ? $"Состояние обновлено. TailscaleSwitcher {report.Installed} — актуальна."
+                    : $"Уже актуален: {report.Installed}");
                 return;
             }
             if (MessageBox.Show(this, $"Доступно обновление {report.Installed} → {report.Release}. Установить?",

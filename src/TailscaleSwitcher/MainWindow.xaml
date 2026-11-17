@@ -60,7 +60,6 @@
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button x:Name="AdminRestartButton" Content="Перезапустить от Администратора" Style="{StaticResource WarningButton}" Click="OnAdminRestartClick" Margin="0,0,8,0"/>
-                <Button x:Name="UpdateButton" Content="Обновления" Style="{StaticResource SmallButton}" Click="OnUpdateCheckClick" Margin="0,0,8,0"/>
                 <Button Content="Обновить" Style="{StaticResource PrimaryButton}" Click="OnRefreshClick"/>
             </StackPanel>
         </Grid>
