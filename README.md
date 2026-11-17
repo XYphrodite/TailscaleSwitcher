@@ -18,11 +18,7 @@ irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.ps1))) -InstallDir 'D:\TailscaleSwitcher' -Version v0.1.0
 ```
 
-Ярлык в меню «Пуск» создаётся по умолчанию, на рабочий стол — опционально:
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.ps1))) -DesktopShortcut
-```
+Ярлык в меню «Пуск» создаётся всегда, а про ярлык на рабочий стол установщик спрашивает (Enter — да). Для скриптов есть ключи `-DesktopShortcut` (поставить без вопроса) и `-NoShortcut` (без ярлыков).
 
 Параметры: `-InstallDir` (по умолчанию `%LOCALAPPDATA%\Programs\TailscaleSwitcher`), `-Version` (`latest`), `-NoPath`, `-DesktopShortcut`, `-NoShortcut`.
 

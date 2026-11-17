@@ -21,7 +21,8 @@
     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/XYphrodite/TailscaleSwitcher/main/install.ps1))) -DesktopShortcut
 
 .PARAMETER DesktopShortcut
-    Also create a shortcut on the current user's desktop. Off by default.
+    Create the desktop shortcut without asking. When neither this switch nor
+    NoShortcut is given, the installer asks interactively.
 
 .PARAMETER NoShortcut
     Do not create any shortcuts, including when DesktopShortcut is specified.
@@ -136,7 +137,26 @@ function Install-TailscaleSwitcherShortcuts {
     )
     if ($NoShortcut) { return }
     $destinations = @('Programs')
-    if ($DesktopShortcut) { $destinations += 'DesktopDirectory' }
+    $wantDesktop = [bool] $DesktopShortcut
+    if (-not $DesktopShortcut) {
+        # Interactive install: ask about the desktop shortcut. The file must stay
+        # ASCII-only, so the prompt is English and "da"/"det" (Cyrillic yes) is
+        # matched by first-letter char codes. Empty input defaults to Yes.
+        try {
+            $answer = Read-Host 'Create a shortcut on the desktop? [Y/n]'
+            if ([string]::IsNullOrWhiteSpace($answer)) {
+                $wantDesktop = $true
+            } else {
+                $first = [char]::ToLowerInvariant($answer.Trim()[0])
+                # y (latin) or d (Cyrillic "da") count as Yes
+                $wantDesktop = ($first -eq 'y') -or ($first -eq [char]0x434)
+            }
+        } catch {
+            Write-Verbose "no interactive input for the desktop shortcut prompt: $_"
+            $wantDesktop = $false
+        }
+    }
+    if ($wantDesktop) { $destinations += 'DesktopDirectory' }
     foreach ($destination in $destinations) {
         try {
             $path = New-TailscaleSwitcherShortcut -Executable $Executable -Folder (& $FolderPath $destination)
