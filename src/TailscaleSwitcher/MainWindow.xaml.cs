@@ -863,7 +863,7 @@ public partial class MainWindow : Window
         finally { SetBusy(false); }
     }
 
-    /// <summary>Показывает оба выхода: напрямую и через системный прокси (у сплит-прокси они разные).</summary>
+    /// <summary>Показывает оба выхода двумя строками: напрямую и через системный прокси.</summary>
     private static string FormatEgressBoth(EgressInfo? direct, IReadOnlyList<EgressInfo> viaProxy)
     {
         var proxied = viaProxy.Where(e => !string.IsNullOrWhiteSpace(e.Ip)).ToList();
@@ -872,9 +872,9 @@ public partial class MainWindow : Window
 
         var viaText = string.Join(" / ", proxied.Select(e => FormatEgress("", e).Trim()));
         if (direct == null) return $"Внешний IP через прокси: {viaText}";
-        if (proxied.Count == 1 && proxied[0].Ip == direct.Ip)
-            return $"Внешний IP: {FormatEgress("", direct).Trim()} (напрямую и через прокси одинаково)";
-        return $"Внешний IP — напрямую: {FormatEgress("", direct).Trim()} · через прокси: {viaText}";
+
+        var same = proxied.Count == 1 && proxied[0].Ip == direct.Ip;
+        return $"Напрямую: {FormatEgress("", direct).Trim()}\nЧерез прокси: {(same ? "то же (одинаково)" : viaText)}";
     }
 
     private static string FormatEgress(string prefix, EgressInfo? egress)
