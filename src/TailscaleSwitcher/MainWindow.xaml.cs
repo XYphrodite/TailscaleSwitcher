@@ -42,6 +42,7 @@ public partial class MainWindow : Window
         _tray.DisconnectExitNodeRequested += () => Dispatcher.InvokeAsync(() => ExitDisconnectAsync());
         _tray.CheckIpRequested += () => Dispatcher.InvokeAsync(() => CheckIpAsync());
         _tray.UpdateRequested += () => Dispatcher.InvokeAsync(() => UpdateCheckAsync());
+        _tray.RestartRequested += () => Dispatcher.Invoke(RestartFromTray);
         _tray.ExitRequested += () => Dispatcher.Invoke(() => { _reallyExit = true; Close(); });
 
         Loaded += async (_, _) => await RefreshAllAsync();
@@ -114,6 +115,10 @@ public partial class MainWindow : Window
 
     private void OnAdminRestartClick(object sender, RoutedEventArgs e) =>
         ((App)Application.Current).RestartApplication(asAdmin: true, startInTray: false);
+
+    /// <summary>Перезапуск той же копией, сразу в трей — иконку искать не нужно.</summary>
+    private void RestartFromTray() =>
+        ((App)Application.Current).RestartApplication(asAdmin: TailscaleService.IsAdmin(), startInTray: true);
 
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
@@ -560,8 +565,10 @@ public partial class MainWindow : Window
                 return;
             var applied = await AppUpdater.ApplyInProcessAsync((recv, total) =>
                 Dispatcher.Invoke(() => SetStatus($"Загрузка обновления: {recv / 1048576.0:0.0}/{(total ?? recv) / 1048576.0:0.0} MB")));
-            AppendLog($"Обновление установлено: {applied.Tag}. Перезапусти приложение.");
-            SetStatus($"Установлено {applied.Tag}. Перезапусти приложение.");
+            AppendLog($"Обновление установлено: {applied.Tag}. Перезапуск.");
+            SetStatus($"Установлено {applied.Tag}. Перезапуск…");
+            RestartFromTray();
+            return;
         }
         catch (Exception ex)
         {

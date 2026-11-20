@@ -32,6 +32,7 @@ public sealed class TrayIcon : IDisposable
     public event Action? DisconnectExitNodeRequested;
     public event Action? CheckIpRequested;
     public event Action? UpdateRequested;
+    public event Action? RestartRequested;
     public event Action? ExitRequested;
 
     public TrayIcon()
@@ -47,6 +48,7 @@ public sealed class TrayIcon : IDisposable
         _exitNodeOffItem = new ToolStripMenuItem("Отключить exit-node");
         var ipItem = new ToolStripMenuItem("Проверить внешний IP");
         _updateItem = new ToolStripMenuItem("Проверить обновления");
+        var restart = new ToolStripMenuItem("Перезапустить");
         var exit = new ToolStripMenuItem("Закрыть приложение");
 
         menu.Items.Add(open);
@@ -57,6 +59,7 @@ public sealed class TrayIcon : IDisposable
         menu.Items.Add(ipItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_updateItem);
+        menu.Items.Add(restart);
         menu.Items.Add(exit);
 
         open.Click += (_, _) => OpenRequested?.Invoke();
@@ -65,6 +68,7 @@ public sealed class TrayIcon : IDisposable
         _exitNodeOffItem.Click += (_, _) => DisconnectExitNodeRequested?.Invoke();
         ipItem.Click += (_, _) => CheckIpRequested?.Invoke();
         _updateItem.Click += (_, _) => UpdateRequested?.Invoke();
+        restart.Click += (_, _) => RestartRequested?.Invoke();
         exit.Click += (_, _) => ExitRequested?.Invoke();
 
         _icon = new NotifyIcon
