@@ -89,7 +89,7 @@
                                 <TextBlock Text="СЕЙЧАС ТРАФИК ИДЁТ" Foreground="#61E8BA" FontSize="11" FontWeight="SemiBold"/>
                                 <TextBlock x:Name="HeroTitle" Text="Напрямую — без узлов и прокси" FontSize="22" FontWeight="SemiBold" Margin="0,4,0,2"/>
                                 <TextBlock x:Name="HeroDetail" Text="" Foreground="#929FB4" FontSize="12" TextWrapping="Wrap"/>
-                                <TextBlock x:Name="HeroIpLine" Text="Внешний IP: не проверялся" Foreground="#929FB4" FontSize="12" Margin="0,6,0,0"/>
+                                <TextBlock x:Name="HeroIpLine" Text="Внешний IP: не проверялся" Foreground="#929FB4" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"/>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                 <Button Content="Проверить внешний IP" Style="{StaticResource SmallButton}" Click="OnCheckIpClick" Margin="0,0,8,0"/>
