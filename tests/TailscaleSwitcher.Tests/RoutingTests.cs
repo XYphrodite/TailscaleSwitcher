@@ -260,4 +260,23 @@ public class RoutingTests
             try { Directory.Delete(dir, true); } catch { }
         }
     }
+
+    [Fact]
+    public void ParseConnectedClients_GroupsEstablishedByPeer()
+    {
+        const string netstat = """
+            TCP    100.89.154.125:1081    100.82.188.11:1    ESTABLISHED
+            TCP    100.89.154.125:1081    100.82.188.11:2    ESTABLISHED
+            TCP    100.89.154.125:1081    100.105.87.52:3    TIME_WAIT
+            TCP    100.89.154.125:1081    100.105.87.52:4    ESTABLISHED
+            TCP    127.0.0.1:10809        127.0.0.1:9        ESTABLISHED
+            """;
+        var names = RoutingCli.ParseTailscaleNames("100.82.188.11  xy-mobdesk-r7  user  windows\n100.105.87.52  mks68i7rtx  user  windows\n");
+        var clients = RoutingCli.ParseConnectedClients(netstat, "100.89.154.125", 1081, names);
+        Assert.Equal(2, clients.Count);
+        Assert.Equal("mks68i7rtx", clients[0].Name);
+        Assert.Equal(1, clients[0].Connections);
+        Assert.Equal("xy-mobdesk-r7", clients[1].Name);
+        Assert.Equal(2, clients[1].Connections);
+    }
 }

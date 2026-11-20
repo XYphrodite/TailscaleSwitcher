@@ -590,7 +590,9 @@ public partial class MainWindow : Window
                 var route = RoutingCli.ClientStatus();
                 var relay = RoutingCli.RelayStatusSnapshot();
                 var proxy = XeonProxyService.GetState();
-                return (cfg, route, relay, proxy,
+                var listen = RoutingCli.ResolveRelayListenAddress(cfg.Relay);
+                var clients = RoutingCli.GetConnectedClients(listen, cfg.Relay.Port);
+                return (cfg, route, relay, proxy, listen, clients,
                     ip: TailscaleService.GetTailscaleIp4(),
                     prefs: TailscaleService.GetPrefs(),
                     admin: TailscaleService.IsAdmin());
@@ -642,8 +644,9 @@ public partial class MainWindow : Window
             RelayStatusLabel.Text = snap.relay.Running
                 ? $"Relay работает (pid {snap.relay.Pid})"
                 : "Relay остановлен";
-            var listen = RoutingCli.ResolveRelayListenAddress(_cfg.Relay);
+            var listen = snap.listen;
             RelayListenLabel.Text = $"Слушает: {listen ?? "?"}:{_cfg.Relay.Port}, апстрим: {(string.IsNullOrWhiteSpace(_cfg.Relay.Upstream) ? "direct" : _cfg.Relay.Upstream)}";
+            FillRelayClients(snap.clients);
 
             FillRoutingTab();
             FillRelayTab();
@@ -757,6 +760,17 @@ public partial class MainWindow : Window
         RelayPortBox.Text = _cfg.Relay.Port.ToString();
         RelayUserBox.Text = _cfg.Relay.Username;
         RelayUpstreamBox.Text = _cfg.Relay.Upstream;
+    }
+
+    private void FillRelayClients(IReadOnlyList<RoutingCli.RelayClient> clients)
+    {
+        RelayClientsList.Items.Clear();
+        foreach (var c in clients)
+            RelayClientsList.Items.Add($"{c.Name}  —  {c.Ip}   ·   {c.Connections} соед.");
+        var empty = clients.Count == 0;
+        RelayClientsList.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+        RelayClientsEmpty.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+        RelayClientsEmpty.Text = "Никто не подключён";
     }
 
     private void LoadExitNodesFromCache(TailscalePrefs? prefs)

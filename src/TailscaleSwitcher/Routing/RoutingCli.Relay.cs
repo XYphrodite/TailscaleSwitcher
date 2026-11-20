@@ -132,6 +132,51 @@ public sealed partial class RoutingCli
         return System.Net.IPAddress.TryParse(ip, out _) ? ip : null;
     }
 
+    public sealed record RelayClient(string Ip, string Name, int Connections);
+
+    /// <summary>Кто сейчас держит соединение с relay (ESTABLISHED на listen:port).</summary>
+    public static List<RelayClient> GetConnectedClients(string? listenIp, int port)
+    {
+        if (string.IsNullOrWhiteSpace(listenIp)) return [];
+        var net = RunProcess("netstat", "-an");
+        var status = RunProcess(FindTailscalePath(), "status");
+        return ParseConnectedClients(net.output, listenIp, port, ParseTailscaleNames(status.output));
+    }
+
+    public static Dictionary<string, string> ParseTailscaleNames(string status)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in status.Split('\n'))
+        {
+            var parts = raw.Trim().Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2 || !System.Net.IPAddress.TryParse(parts[0], out _)) continue;
+            map[parts[0]] = parts[1];
+        }
+        return map;
+    }
+
+    public static List<RelayClient> ParseConnectedClients(
+        string netstat, string listenIp, int port, IReadOnlyDictionary<string, string>? names)
+    {
+        var local = $"{listenIp}:{port}";
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in netstat.Split('\n'))
+        {
+            var parts = raw.Trim().Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 4 || !parts[3].Equals("ESTABLISHED", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!parts[1].Equals(local, StringComparison.OrdinalIgnoreCase)) continue;
+            var remote = parts[2];
+            var colon = remote.LastIndexOf(':');
+            if (colon <= 0) continue;
+            var ip = remote[..colon];
+            counts[ip] = counts.GetValueOrDefault(ip) + 1;
+        }
+        return counts
+            .Select(kv => new RelayClient(kv.Key, names != null && names.TryGetValue(kv.Key, out var name) ? name : kv.Key, kv.Value))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private static (bool ok, string output) RunNetsh(string args) => RunProcess("netsh", args);
 
     private static (bool ok, string output) RunProcess(string exe, string args)
