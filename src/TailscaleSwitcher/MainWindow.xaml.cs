@@ -166,12 +166,12 @@ public partial class MainWindow : Window
             var state = XeonProxyService.GetState();
             var (endpoint, ok) = await XeonProxyService.ResolveEndpointAsync(null);
             var direct = await XeonProxyService.CheckEgressAsync(new ProxyState(false, "", ""), 6);
-            var egress = await XeonProxyService.CheckEgressAsync(state, 6);
-            _egress = direct ?? egress;
+            var proxied = await XeonProxyService.CheckEgressMultiAsync(state, 6);
+            _egress = direct ?? (proxied.Count > 0 ? proxied[0] : null);
             ProxyDetailLabel.Text = ok
                 ? $"Xeon доступен ({endpoint}); прокси {(state.Enabled ? $"включён → {state.Server}" : "выключен")}"
                 : "Xeon не отвечает (ни 192.168.1.5:10809, ни 100.119.48.15:10809)";
-            var both = FormatEgressBoth(direct, state.Enabled ? egress : null);
+            var both = FormatEgressBoth(direct, state.Enabled ? proxied : []);
             HeroIpLine.Text = both;
             AppendLog($"Проверка прокси: {ProxyDetailLabel.Text}\n{both}");
         }
@@ -852,11 +852,11 @@ public partial class MainWindow : Window
             var state = XeonProxyService.GetState();
             var direct = await XeonProxyService.CheckEgressAsync(new ProxyState(false, "", ""), 6);
             var viaProxy = state.Enabled
-                ? await XeonProxyService.CheckEgressAsync(state, 6)
-                : null;
+                ? await XeonProxyService.CheckEgressMultiAsync(state, 6)
+                : [];
 
             var text = FormatEgressBoth(direct, viaProxy);
-            _egress = direct ?? viaProxy;
+            _egress = direct ?? (viaProxy.Count > 0 ? viaProxy[0] : null);
             HeroIpLine.Text = text;
             AppendLog(text);
         }
@@ -864,13 +864,17 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Показывает оба выхода: напрямую и через системный прокси (у сплит-прокси они разные).</summary>
-    private static string FormatEgressBoth(EgressInfo? direct, EgressInfo? viaProxy)
+    private static string FormatEgressBoth(EgressInfo? direct, IReadOnlyList<EgressInfo> viaProxy)
     {
-        if (direct == null && viaProxy == null) return "Внешний IP: не удалось проверить";
-        if (viaProxy == null) return $"Внешний IP: {FormatEgress("", direct).Trim()}";
-        if (direct == null) return $"Внешний IP через прокси: {FormatEgress("", viaProxy).Trim()}";
-        if (direct.Ip == viaProxy.Ip) return $"Внешний IP: {FormatEgress("", direct).Trim()} (напрямую и через прокси одинаково)";
-        return $"Внешний IP — напрямую: {FormatEgress("", direct).Trim()} · через прокси: {FormatEgress("", viaProxy).Trim()}";
+        var proxied = viaProxy.Where(e => !string.IsNullOrWhiteSpace(e.Ip)).ToList();
+        if (direct == null && proxied.Count == 0) return "Внешний IP: не удалось проверить";
+        if (proxied.Count == 0) return $"Внешний IP: {FormatEgress("", direct).Trim()} (напрямую)";
+
+        var viaText = string.Join(" / ", proxied.Select(e => FormatEgress("", e).Trim()));
+        if (direct == null) return $"Внешний IP через прокси: {viaText}";
+        if (proxied.Count == 1 && proxied[0].Ip == direct.Ip)
+            return $"Внешний IP: {FormatEgress("", direct).Trim()} (напрямую и через прокси одинаково)";
+        return $"Внешний IP — напрямую: {FormatEgress("", direct).Trim()} · через прокси: {viaText}";
     }
 
     private static string FormatEgress(string prefix, EgressInfo? egress)

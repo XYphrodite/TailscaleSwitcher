@@ -338,20 +338,7 @@ public static class XeonProxyService
 
     public static async Task<EgressInfo?> CheckEgressAsync(ProxyState currentState, int timeoutSeconds = 6)
     {
-        using var handler = new HttpClientHandler();
-        if (currentState.Enabled && !string.IsNullOrWhiteSpace(currentState.Server))
-        {
-            var ep = ExtractHttpProxyEndpoint(currentState.Server);
-            handler.UseProxy = true;
-            handler.Proxy = new WebProxy($"http://{ep}") { BypassProxyOnLocal = true };
-        }
-        else
-        {
-            handler.UseProxy = false;
-        }
-
-        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
-
+        using var http = CreateEgressClient(currentState, timeoutSeconds);
         try
         {
             var json = await http.GetStringAsync("https://ipinfo.io/json");
@@ -387,6 +374,75 @@ public static class XeonProxyService
         }
 
         return null;
+    }
+
+    private static HttpClient CreateEgressClient(ProxyState currentState, int timeoutSeconds)
+    {
+        var handler = new HttpClientHandler();
+        if (currentState.Enabled && !string.IsNullOrWhiteSpace(currentState.Server))
+        {
+            var ep = ExtractHttpProxyEndpoint(currentState.Server);
+            handler.UseProxy = true;
+            handler.Proxy = new WebProxy($"http://{ep}") { BypassProxyOnLocal = true };
+        }
+        else
+        {
+            handler.UseProxy = false;
+        }
+        return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+    }
+
+    /// <summary>
+    /// Проверяет выход через несколько сервисов сразу: сплит-прокси (Happ) одни адреса
+    /// пропускает напрямую, а другие гоняет через туннель — только так видны оба выхода.
+    /// </summary>
+    public static async Task<List<EgressInfo>> CheckEgressMultiAsync(ProxyState currentState, int timeoutSeconds = 6)
+    {
+        var results = new List<EgressInfo>();
+        using var http = CreateEgressClient(currentState, timeoutSeconds);
+
+        async Task TryAdd(Func<Task<string>> fetch, Func<string, EgressInfo?> parse)
+        {
+            try
+            {
+                var info = parse(await fetch());
+                if (info != null && !results.Any(r => r.Ip == info.Ip)) results.Add(info);
+            }
+            catch { /* try next service */ }
+        }
+
+        // ipinfo.io — город/страна; Happ часто пропускает его напрямую
+        await TryAdd(() => http.GetStringAsync("https://ipinfo.io/json"), json =>
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var ip = root.TryGetProperty("ip", out var p) ? p.GetString() : null;
+            if (string.IsNullOrWhiteSpace(ip)) return null;
+            return new EgressInfo(ip.Trim(),
+                root.TryGetProperty("country", out var c) ? c.GetString() : null,
+                root.TryGetProperty("city", out var ct) ? ct.GetString() : null,
+                root.TryGetProperty("org", out var o) ? o.GetString() : null);
+        });
+
+        // myip.wtf — город/страна; обычно виден туннельный выход
+        await TryAdd(() => http.GetStringAsync("https://myip.wtf/json"), json =>
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var ip = root.TryGetProperty("YourFuckingIPAddress", out var p) ? p.GetString() : null;
+            if (string.IsNullOrWhiteSpace(ip)) return null;
+            var loc = root.TryGetProperty("YourFuckingLocation", out var l) ? l.GetString() : null;
+            return new EgressInfo(ip.Trim(), null, string.IsNullOrWhiteSpace(loc) ? null : loc.Trim(), null);
+        });
+
+        // icanhazip — только IP, добивочный
+        await TryAdd(() => http.GetStringAsync("https://icanhazip.com"), s =>
+        {
+            var ip = s.Trim();
+            return ip.Contains('.') ? new EgressInfo(ip) : null;
+        });
+
+        return results;
     }
 
     private static void NotifyWinInet()
