@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private bool _trayHintShown;
     private bool _suppressProfile;
     private bool _suppressMode;
+    private bool _suppressExclusion;
     private bool _initialized;
 
     public MainWindow(Func<EventWaitHandle?>? showEventProvider = null, bool startHidden = false)
@@ -720,6 +721,7 @@ public partial class MainWindow : Window
         }
         finally { _suppressProfile = false; }
 
+        FillExclusions();
         var profile = ActiveProfile();
         if (profile == null)
         {
@@ -753,6 +755,52 @@ public partial class MainWindow : Window
     {
         list.Items.Clear();
         foreach (var item in items) list.Items.Add(item);
+    }
+
+    private void FillExclusions()
+    {
+        _suppressExclusion = true;
+        ExclusionList.Children.Clear();
+        var muted = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x92, 0x9F, 0xB4));
+        foreach (var ex in _cfg.Exclusions)
+        {
+            var row = new Grid { Margin = new Thickness(0, 4, 0, 4) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var toggle = new CheckBox
+            {
+                Style = (Style)FindResource("ToggleSwitch"),
+                IsChecked = ex.Enabled,
+                Tag = ex.Name,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            toggle.Click += OnExclusionToggle;
+            var text = new StackPanel { Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+            text.Children.Add(new TextBlock { Text = ex.Name, FontWeight = FontWeights.SemiBold });
+            var detail = string.Join(", ", ex.Apps);
+            if (ex.UdpPorts.Count > 0)
+                detail += (detail.Length > 0 ? " · " : "") + "UDP " + string.Join(", ", ex.UdpPorts);
+            text.Children.Add(new TextBlock { Text = detail, Foreground = muted, FontSize = 11, TextWrapping = TextWrapping.Wrap });
+            Grid.SetColumn(text, 1);
+            row.Children.Add(toggle);
+            row.Children.Add(text);
+            ExclusionList.Children.Add(row);
+        }
+        _suppressExclusion = false;
+    }
+
+    private async void OnExclusionToggle(object sender, RoutedEventArgs e)
+    {
+        if (!_initialized || _suppressExclusion || sender is not CheckBox box || box.Tag is not string name) return;
+        var item = _cfg.FindExclusion(name);
+        if (item == null) return;
+        item.Enabled = box.IsChecked == true;
+        SaveCfg();
+        SetStatus($"Набор «{item.Name}» {(item.Enabled ? "включён" : "выключен")}.");
+        if (!RoutingCli.ClientStatus().Running) return;
+        if (!await EnsureAdminAsync("Применение исключений")) return;
+        await RunRoutingAsync("route", "on");
+        await RefreshAllAsync();
     }
 
     private void FillRelayTab()

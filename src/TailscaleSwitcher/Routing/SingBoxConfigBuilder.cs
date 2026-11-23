@@ -79,6 +79,9 @@ public static class SingBoxConfigBuilder
 {
     public const string TunInterfaceName = "TSS-route";
     public const string TunAddress = "172.30.0.1/30";
+    public const string PhoneTunInterfaceName = "TSS-phone";
+    public const string PhoneTunAddress = "198.18.0.1/30";
+    public const string PhoneTunNextHop = "198.18.0.2";
     public const string TailscaleCgnat = "100.64.0.0/10";
 
     private static readonly JsonSerializerOptions Pretty = new()
@@ -178,7 +181,7 @@ public static class SingBoxConfigBuilder
     public static readonly string[] AlwaysDirectProcesses =
         ["tailscaled.exe", "tailscale-ipn.exe", "tailscale.exe", "sing-box.exe"];
 
-    public static string BuildClient(RouteProfile profile, string? logFile = null)
+    public static string BuildClient(RouteProfile profile, string? logFile = null, IEnumerable<ExclusionProfile>? exclusions = null)
     {
         var rules = new JsonArray
         {
@@ -201,8 +204,13 @@ public static class SingBoxConfigBuilder
         {
             // Весь трафик -> club; напрямую только Tailscale, локальная сеть и исключения.
             rules.Add(new JsonObject { ["process_name"] = ToArray(AlwaysDirectProcesses), ["outbound"] = "direct" });
-            var bypass = RuleSet.From(profile.BypassHosts, profile.BypassApps);
+            var enabled = (exclusions ?? []).Where(e => e.Enabled).ToList();
+            var bypassApps = profile.BypassApps.Concat(enabled.SelectMany(e => e.Apps)).ToList();
+            var bypassHosts = profile.BypassHosts.Concat(enabled.SelectMany(e => e.Hosts)).ToList();
+            var bypass = RuleSet.From(bypassHosts, bypassApps);
             bypass.AddRules(rules, "direct");
+            foreach (var range in enabled.SelectMany(e => e.UdpPorts).Distinct(StringComparer.OrdinalIgnoreCase))
+                rules.Add(new JsonObject { ["network"] = "udp", ["port_range"] = range, ["outbound"] = "direct" });
             rules.Add(new JsonObject { ["ip_is_private"] = true, ["outbound"] = "direct" });
             // QUIC через TCP-only relay не заработает: пусть браузер сразу откатится на TCP
             rules.Add(new JsonObject { ["network"] = "udp", ["port"] = 443, ["action"] = "reject" });

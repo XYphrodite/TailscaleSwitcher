@@ -38,11 +38,12 @@ public sealed partial class RoutingCli
                     return Fail("Использование: route bypass app|host add|remove <значение> [--profile имя]");
                 return RouteListEdit(cfg, rest.Skip(1).ToList(), a, isApp: what == "app", bypass: true);
             }
+            case "exclude": return ExcludeCmd(cfg, rest);
             case "config":
             {
                 var p = a.Get("--profile") is { } n ? cfg.Find(n) : cfg.FindActiveOrOnly();
                 if (p == null) return Fail("Профиль не найден. См. 'route list'.");
-                var json = SingBoxConfigBuilder.BuildClient(p);
+                var json = SingBoxConfigBuilder.BuildClient(p, exclusions: _store.Load().Exclusions);
                 _out.WriteLine(string.IsNullOrEmpty(p.Password) ? json : json.Replace(p.Password, "***"));
                 return 0;
             }
@@ -137,7 +138,7 @@ public sealed partial class RoutingCli
         var exe = await SingBoxInstaller.EnsureAsync(m => _out.WriteLine(m));
         if (ClientRunner.GetStatus().Running) ClientRunner.Stop();
 
-        var err = await ClientRunner.StartAsync(exe, SingBoxConfigBuilder.BuildClient(p, ClientRunner.LogPath));
+        var err = await ClientRunner.StartAsync(exe, SingBoxConfigBuilder.BuildClient(p, ClientRunner.LogPath, cfg.Exclusions));
         if (err != null) return Fail(err);
 
         cfg.Active = p.Name;
@@ -193,5 +194,31 @@ public sealed partial class RoutingCli
             return true;
         }
         catch (Exception ex) { _err.WriteLine($"Не удалось вернуть системный прокси: {ex.Message}"); return false; }
+    }
+
+    private int ExcludeCmd(RoutingConfig cfg, List<string> rest)
+    {
+        var sub = rest.FirstOrDefault()?.ToLowerInvariant() ?? "list";
+        if (sub is "list")
+        {
+            if (cfg.Exclusions.Count == 0) { _out.WriteLine("Наборов исключений нет."); return 0; }
+            foreach (var e in cfg.Exclusions)
+            {
+                var mark = e.Enabled ? "*" : " ";
+                var apps = e.Apps.Count == 0 ? "-" : string.Join(", ", e.Apps);
+                var udp = e.UdpPorts.Count == 0 ? "" : $", UDP {string.Join(", ", e.UdpPorts)}";
+                _out.WriteLine($"{mark} {e.Name}  {apps}{udp}");
+            }
+            return 0;
+        }
+        var name = rest.Skip(1).FirstOrDefault();
+        var item = cfg.FindExclusion(name);
+        if (item == null) return Fail(name == null ? "Укажи имя набора." : $"Набор '{name}' не найден. См. 'route exclude'.");
+        if (sub is not ("on" or "off"))
+            return Fail("Использование: route exclude [list|on|off] [имя]");
+        item.Enabled = sub == "on";
+        _store.Save(cfg);
+        _out.WriteLine($"Набор '{item.Name}': {(item.Enabled ? "включён" : "выключен")}. Если маршрутизация включена — повтори 'route on'.");
+        return 0;
     }
 }

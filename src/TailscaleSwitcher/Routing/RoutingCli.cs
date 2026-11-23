@@ -70,6 +70,7 @@ public sealed partial class RoutingCli
               route app  add|remove <chrome.exe | C:\путь\app.exe> [--profile имя]
               route host add|remove <example.com | full:host | 1.2.3.4 | 10.0.0.0/8> [--profile имя]
               route bypass app|host add|remove <значение>   исключения для режима «весь трафик» (идут напрямую)
+              route exclude [list|on|off] [имя]      набор исключений мимо узла (zapret). Встроенный: Discord
               route config [--profile имя]          показать сгенерированный config sing-box
 
             Сервер (клубный ПК):

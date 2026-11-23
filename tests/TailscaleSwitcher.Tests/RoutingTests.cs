@@ -279,4 +279,17 @@ public class RoutingTests
         Assert.Equal("xy-mobdesk-r7", clients[1].Name);
         Assert.Equal(2, clients[1].Connections);
     }
+
+    [Fact]
+    public void BuildClient_EnabledExclusionGoesDirect()
+    {
+        var p = Profile();
+        p.AllTraffic = true;
+        p.Apps.Clear();
+        p.Hosts.Clear();
+        var root = JsonNode.Parse(SingBoxConfigBuilder.BuildClient(p, exclusions: [ExclusionPresets.DiscordPreset(true)]))!;
+        var rules = root["route"]!["rules"]!.AsArray();
+        Assert.Contains(rules, r => r!["process_name"]?.ToJsonString().Contains("Discord.exe") == true);
+        Assert.Contains(rules, r => r!["port_range"]?.ToString() == "19294:19344");
+    }
 }
