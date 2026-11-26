@@ -18,6 +18,7 @@ public sealed class TrayIcon : IDisposable
 {
     private readonly NotifyIcon _icon;
     private readonly ToolStripMenuItem _routeItem;
+    private readonly ToolStripMenuItem _phoneItem;
     private readonly ToolStripMenuItem _proxyItem;
     private readonly ToolStripMenuItem _exitNodeOffItem;
     private readonly ToolStripMenuItem _updateItem;
@@ -28,6 +29,7 @@ public sealed class TrayIcon : IDisposable
 
     public event Action? OpenRequested;
     public event Action? ToggleRouteRequested;
+    public event Action? TogglePhoneRequested;
     public event Action? ToggleProxyRequested;
     public event Action? DisconnectExitNodeRequested;
     public event Action? CheckIpRequested;
@@ -44,6 +46,7 @@ public sealed class TrayIcon : IDisposable
         var menu = new ContextMenuStrip();
         var open = new ToolStripMenuItem($"Открыть Tailscale Switcher (v{AppVersion.Informational})");
         _routeItem = new ToolStripMenuItem("Маршрутизация: выключена");
+        _phoneItem = new ToolStripMenuItem("Телефон (Happ): выключен");
         _proxyItem = new ToolStripMenuItem("Прокси Xeon: выключен");
         _exitNodeOffItem = new ToolStripMenuItem("Отключить exit-node");
         var ipItem = new ToolStripMenuItem("Проверить внешний IP");
@@ -54,6 +57,7 @@ public sealed class TrayIcon : IDisposable
         menu.Items.Add(open);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_routeItem);
+        menu.Items.Add(_phoneItem);
         menu.Items.Add(_proxyItem);
         menu.Items.Add(_exitNodeOffItem);
         menu.Items.Add(ipItem);
@@ -64,6 +68,7 @@ public sealed class TrayIcon : IDisposable
 
         open.Click += (_, _) => OpenRequested?.Invoke();
         _routeItem.Click += (_, _) => ToggleRouteRequested?.Invoke();
+        _phoneItem.Click += (_, _) => TogglePhoneRequested?.Invoke();
         _proxyItem.Click += (_, _) => ToggleProxyRequested?.Invoke();
         _exitNodeOffItem.Click += (_, _) => DisconnectExitNodeRequested?.Invoke();
         ipItem.Click += (_, _) => CheckIpRequested?.Invoke();
@@ -85,6 +90,7 @@ public sealed class TrayIcon : IDisposable
         TrayVisualState state,
         string summaryText,
         bool routeRunning,
+        bool phoneRunning,
         bool proxyEnabled,
         bool hasExitNode,
         bool busy)
@@ -105,6 +111,9 @@ public sealed class TrayIcon : IDisposable
 
         _routeItem.Text = routeRunning ? "Выключить маршрутизацию" : "Включить маршрутизацию";
         _routeItem.Enabled = !busy;
+
+        _phoneItem.Text = phoneRunning ? "Выключить мост телефона" : "Включить мост через телефон";
+        _phoneItem.Enabled = !busy;
 
         _proxyItem.Text = proxyEnabled ? "Выключить прокси Xeon" : "Включить прокси Xeon";
         _proxyItem.Enabled = !busy;

@@ -175,9 +175,28 @@ public sealed class RoutingConfigStore
     public void Save(RoutingConfig config)
     {
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
-        var tmp = Path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(config, JsonOptions));
-        File.Move(tmp, Path, overwrite: true);
+        var json = JsonSerializer.Serialize(config, JsonOptions);
+        var tmp = $"{Path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(tmp, json);
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    File.Move(tmp, Path, overwrite: true);
+                    return;
+                }
+                catch (IOException) when (attempt < 2)
+                {
+                    Thread.Sleep(25);
+                }
+            }
+        }
+        finally
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+        }
     }
 }
 

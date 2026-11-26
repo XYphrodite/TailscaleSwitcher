@@ -44,7 +44,7 @@ internal static class CliRunner
         if (first is "proxy" or "px" or "xeon-proxy")
             return await HandleProxyCliAsync(args).ConfigureAwait(false);
 
-        if (first is "route" or "rt" or "relay")
+        if (first is "route" or "rt" or "relay" or "phone" or "ph")
             return await new RoutingCli().RunAsync(args).ConfigureAwait(false);
 
         if (first is "update" or "--update" or "--apply-update")
@@ -76,6 +76,7 @@ internal static class CliRunner
         Console.WriteLine("    Опции proxy: --server <host[:port]>  --force  --winhttp");
         Console.WriteLine("  TailscaleSwitcher route [on|off|list|profile|app|host|config] — маршрутизация приложений/адресов (см. route --help)");
         Console.WriteLine("  TailscaleSwitcher relay [init|start|stop|status|info|firewall] — серверная часть на выходном ПК");
+        Console.WriteLine("  TailscaleSwitcher phone [on|off|toggle|status|set|config] — мост через Wi-Fi телефона + Happ (см. phone --help)");
         Console.WriteLine("  TailscaleSwitcher update         — обновить из GitHub Releases");
         Console.WriteLine("  TailscaleSwitcher update --check — проверить наличие обновления");
         Console.WriteLine("  TailscaleSwitcher --version      — показать версию");

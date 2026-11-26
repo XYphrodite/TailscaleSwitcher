@@ -39,6 +39,7 @@ public partial class MainWindow : Window
         _tray = new TrayIcon();
         _tray.OpenRequested += ShowFromTray;
         _tray.ToggleRouteRequested += () => Dispatcher.InvokeAsync(() => ToggleRouteAsync());
+        _tray.TogglePhoneRequested += () => Dispatcher.InvokeAsync(() => TogglePhoneAsync());
         _tray.ToggleProxyRequested += () => Dispatcher.InvokeAsync(() => ToggleProxyAsync());
         _tray.DisconnectExitNodeRequested += () => Dispatcher.InvokeAsync(() => ExitDisconnectAsync());
         _tray.CheckIpRequested += () => Dispatcher.InvokeAsync(() => CheckIpAsync());
@@ -134,6 +135,7 @@ public partial class MainWindow : Window
         if (!_initialized) return;
         PanelOverview.Visibility = TabOverview.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelRouting.Visibility = TabRouting.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        PanelPhone.Visibility = TabPhone.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelExit.Visibility = TabExit.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelRelay.Visibility = TabRelay.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         PanelLog.Visibility = TabLog.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
@@ -146,17 +148,23 @@ public partial class MainWindow : Window
     private async void OnGoDirectClick(object sender, RoutedEventArgs e)
     {
         if (!await EnsureAdminAsync("«Прямой выход» (выключение маршрутизации и exit-node)")) return;
+        if (PhoneBridgeService.GetStatus().Active)
+            await RunRoutingAsync("phone", "off");
         await RunRoutingAsync("route", "off");
         await RunTailscaleAsync("set --exit-node=");
         XeonProxyService.Disable(TailscaleService.IsAdmin());
         AppendLog("Системный прокси Xeon выключен.");
         await RefreshAllAsync();
-        SetStatus("Прямой выход: маршрут, exit-node и прокси выключены.");
+        SetStatus("Прямой выход: маршрут, мост телефона, exit-node и прокси выключены.");
     }
 
     private async void OnRouteToggleClick(object sender, RoutedEventArgs e) => await ToggleRouteAsync();
 
     private void OnGoRoutingClick(object sender, RoutedEventArgs e) => TabRouting.IsChecked = true;
+
+    private async void OnPhoneToggleClick(object sender, RoutedEventArgs e) => await TogglePhoneAsync();
+
+    private void OnGoPhoneClick(object sender, RoutedEventArgs e) => TabPhone.IsChecked = true;
 
     private async void OnExitOffClick(object sender, RoutedEventArgs e) => await ExitDisconnectAsync();
 
@@ -392,6 +400,141 @@ public partial class MainWindow : Window
         await RefreshAllAsync();
     }
 
+    // ────────────────────────────────────────────── Мост через телефон (Happ)
+
+    private async void OnPhoneProbeClick(object sender, RoutedEventArgs e)
+    {
+        if (_busy) return;
+        if (!TryApplyPhoneInputs(save: false, out var error))
+        {
+            SetStatus(error!);
+            return;
+        }
+        SetBusy(true);
+        PhoneProbeLabel.Text = "Проверяю порты на телефоне…";
+        try
+        {
+            var probe = await PhoneBridgeService.ProbeAsync(_cfg.Phone, timeoutMs: 2000);
+            if (string.IsNullOrEmpty(probe.PhoneIp))
+            {
+                PhoneProbeLabel.Text = "Шлюз телефона не найден — подключись к Wi-Fi/USB-модему или введи IP вручную.";
+                SetStatus("Шлюз телефона не обнаружен.");
+            }
+            else
+            {
+                PhoneProbeLabel.Text = $"{probe.PhoneIp}: SOCKS5 :{probe.SocksPort} {(probe.SocksOpen ? "OPEN" : "закрыт")} · HTTP :{probe.HttpPort} {(probe.HttpOpen ? "OPEN" : "закрыт")}";
+                AppendLog($"Проверка телефона {PhoneProbeLabel.Text}");
+                SetStatus(probe.SocksOpen || probe.HttpOpen
+                    ? $"Телефон {probe.PhoneIp} отвечает."
+                    : $"Порты на {probe.PhoneIp} закрыты — включи Allow LAN Connections в Happ на телефоне.");
+            }
+        }
+        finally { SetBusy(false); }
+    }
+
+    private async void OnPhonePowerClick(object sender, RoutedEventArgs e) => await TogglePhoneAsync(fromPhoneTab: true);
+
+    private async void OnPhoneCleanOffClick(object sender, RoutedEventArgs e)
+    {
+        if (_busy) return;
+        if (PhoneBridgeService.IsTunRunning() && !await EnsureAdminAsync("Чистый сброс TUN-моста телефона")) return;
+        await RunRoutingAndRefreshAsync("phone", "off", "--clean");
+    }
+
+    private void OnPhoneSaveClick(object sender, RoutedEventArgs e)
+    {
+        if (!TryApplyPhoneInputs(save: true, out var error))
+        {
+            SetStatus(error!);
+            return;
+        }
+        FillPhoneTab(PhoneBridgeService.GetStatus());
+        SetStatus("Настройки моста телефона сохранены.");
+        AppendLog($"Настройки телефона сохранены: режим {_cfg.Phone.Mode}, IP={(_cfg.Phone.PhoneIp.Length == 0 ? "авто" : _cfg.Phone.PhoneIp)}, SOCKS={_cfg.Phone.SocksPort}, HTTP={_cfg.Phone.HttpPort}.");
+    }
+
+    private async void OnPhoneConfigClick(object sender, RoutedEventArgs e)
+    {
+        if (!TryApplyPhoneInputs(save: true, out var error))
+        {
+            SetStatus(error!);
+            return;
+        }
+        var (code, _) = await RunRoutingAsync("phone", "config");
+        if (code == 0) TabLog.IsChecked = true;
+        SetStatus(code == 0 ? "Конфиг sing-box выведен в «Журнал»." : "Не удалось построить конфиг — смотри «Журнал».");
+    }
+
+    private void OnPhoneLogTailClick(object sender, RoutedEventArgs e)
+    {
+        var tail = PhoneBridgeService.TailLog(40);
+        AppendLog("─── хвост лога моста телефона (sing-box) ───\n" + (string.IsNullOrWhiteSpace(tail) ? "(лог пуст)" : tail));
+        TabLog.IsChecked = true;
+    }
+
+    private async Task TogglePhoneAsync(bool fromPhoneTab = false)
+    {
+        if (_busy) return;
+        var st = PhoneBridgeService.GetStatus();
+        if (st.Active)
+        {
+            if (st.ActiveMode == PhoneBridgeMode.Tun && !await EnsureAdminAsync("Выключение моста через телефон (TUN)"))
+                return;
+            await RunRoutingAndRefreshAsync("phone", "off");
+            return;
+        }
+
+        if (fromPhoneTab && !TryApplyPhoneInputs(save: true, out var error))
+        {
+            SetStatus(error!);
+            await RefreshAllAsync();
+            return;
+        }
+
+        if (_cfg.Phone.Mode == PhoneBridgeMode.Tun && !await EnsureAdminAsync("Включение моста через телефон (TUN)"))
+        {
+            await RefreshAllAsync();
+            return;
+        }
+
+        await RunRoutingAndRefreshAsync("phone", "on");
+    }
+
+    private bool TryApplyPhoneInputs(bool save, out string? error)
+    {
+        error = null;
+        var ipRaw = PhoneIpBox.Text.Trim();
+        if (ipRaw.Length > 0 && (!System.Net.IPAddress.TryParse(ipRaw, out var addr) ||
+                                 addr.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork))
+        {
+            error = $"Некорректный IPv4-адрес телефона: «{ipRaw}».";
+            return false;
+        }
+        if (!int.TryParse(PhoneSocksPortBox.Text.Trim(), out var socksPort) || socksPort is < 1 or > 65535)
+        {
+            error = "Порт SOCKS5 должен быть числом от 1 до 65535.";
+            return false;
+        }
+        if (!int.TryParse(PhoneHttpPortBox.Text.Trim(), out var httpPort) || httpPort is < 1 or > 65535)
+        {
+            error = "Порт HTTP должен быть числом от 1 до 65535.";
+            return false;
+        }
+        var dns = PhoneDnsBox.Text.Trim();
+        if (dns.Length == 0) dns = "1.1.1.1";
+
+        _cfg.Phone ??= new PhoneSettings();
+        _cfg.Phone.Mode = PhoneModeProxyRadio.IsChecked == true ? PhoneBridgeMode.Proxy : PhoneBridgeMode.Tun;
+        _cfg.Phone.PhoneIp = ipRaw;
+        _cfg.Phone.SocksPort = socksPort;
+        _cfg.Phone.HttpPort = httpPort;
+        _cfg.Phone.DnsServer = dns;
+        _cfg.Phone.StopLocalHapp = PhoneStopHappCheck.IsChecked == true;
+        _cfg.Phone.RouteTailscaleViaPhone = PhoneRouteTsCheck.IsChecked == true;
+        if (save) SaveCfg();
+        return true;
+    }
+
     // ────────────────────────────────────────────── Exit-node
 
     private async void OnExitConnectClick(object sender, RoutedEventArgs e)
@@ -588,12 +731,14 @@ public partial class MainWindow : Window
             var snap = await Task.Run(() =>
             {
                 var cfg = _store.Load();
+                cfg.Phone ??= new PhoneSettings();
                 var route = RoutingCli.ClientStatus();
+                var phone = PhoneBridgeService.GetStatus();
                 var relay = RoutingCli.RelayStatusSnapshot();
                 var proxy = XeonProxyService.GetState();
                 var listen = RoutingCli.ResolveRelayListenAddress(cfg.Relay);
                 var clients = RoutingCli.GetConnectedClients(listen, cfg.Relay.Port);
-                return (cfg, route, relay, proxy, listen, clients,
+                return (cfg, route, phone, relay, proxy, listen, clients,
                     ip: TailscaleService.GetTailscaleIp4(),
                     prefs: TailscaleService.GetPrefs(),
                     admin: TailscaleService.IsAdmin());
@@ -627,6 +772,18 @@ public partial class MainWindow : Window
             if (RoutingCli.IsSystemProxySuspended())
                 RouteDetailLabel.Text += " · системный прокси Windows временно отключён";
 
+            // Мост через телефон
+            PhoneToggle.IsChecked = snap.phone.Active;
+            PhoneStateLabel.Text = snap.phone.Active
+                ? (snap.phone.ActiveMode == PhoneBridgeMode.Tun ? "Включён (TUN)" : "Включён (Прокси)")
+                : "Выключен";
+            PhoneDetailLabel.Text = snap.phone.Active
+                ? $"{snap.phone.PhoneIp}:{snap.phone.Port}" +
+                  (snap.phone.ActiveMode == PhoneBridgeMode.Tun ? $" · {SingBoxConfigBuilder.PhoneTunInterfaceName}" : " · системный прокси")
+                : snap.phone.Gateway != null
+                    ? $"Шлюз {snap.phone.Gateway.GatewayIp} ({snap.phone.Gateway.Kind}: {snap.phone.Gateway.InterfaceName})"
+                    : "Шлюз телефона не обнаружен";
+
             // Exit-node
             var exitIp = snap.prefs?.ExitNodeIP ?? "";
             var hasExit = exitIp.Length > 0;
@@ -650,10 +807,11 @@ public partial class MainWindow : Window
             FillRelayClients(snap.clients);
 
             FillRoutingTab();
+            FillPhoneTab(snap.phone);
             FillRelayTab();
             LoadExitNodesFromCache(snap.prefs);
-            UpdateHero(snap.route, profile, exitIp, snap.proxy);
-            UpdateTray(snap.route, snap.proxy, hasExit, snap.relay);
+            UpdateHero(snap.route, snap.phone, profile, exitIp, snap.proxy);
+            UpdateTray(snap.route, snap.phone, snap.proxy, hasExit, snap.relay);
         }
         catch (Exception ex)
         {
@@ -661,9 +819,18 @@ public partial class MainWindow : Window
         }
     }
 
-    private void UpdateHero(RunnerStatus route, RouteProfile? profile, string exitIp, ProxyState proxy)
+    private void UpdateHero(RunnerStatus route, PhoneStatusSnapshot phone, RouteProfile? profile, string exitIp, ProxyState proxy)
     {
-        if (route.Running && profile != null)
+        if (phone.Active)
+        {
+            HeroTitle.Text = phone.ActiveMode == PhoneBridgeMode.Tun
+                ? $"Через телефон (TUN) → {phone.PhoneIp}:{phone.Port}"
+                : $"Через прокси телефона ({phone.PhoneIp}:{phone.Port})";
+            HeroDetail.Text = phone.ActiveMode == PhoneBridgeMode.Tun
+                ? "Весь трафик ПК идёт через VPN телефона (Happ Allow LAN). Tailscale и локальная сеть — напрямую."
+                : "Системный прокси Windows направляет трафик через Happ на телефоне.";
+        }
+        else if (route.Running && profile != null)
         {
             HeroTitle.Text = $"Через узел «{profile.Name}» ({profile.Node}:{profile.Port})";
             HeroDetail.Text = profile.AllTraffic
@@ -688,24 +855,49 @@ public partial class MainWindow : Window
         else
         {
             HeroTitle.Text = "Напрямую — без узлов и прокси";
-            HeroDetail.Text = "Маршрутизация, exit-node и системный прокси выключены.";
+            HeroDetail.Text = "Маршрутизация, мост телефона, exit-node и системный прокси выключены.";
         }
     }
 
-    private void UpdateTray(RunnerStatus route, ProxyState proxy, bool hasExit, RunnerStatus relay)
+    private void UpdateTray(RunnerStatus route, PhoneStatusSnapshot phone, ProxyState proxy, bool hasExit, RunnerStatus relay)
     {
-        var routed = route.Running || proxy.Enabled || hasExit;
+        var routed = route.Running || phone.Active || proxy.Enabled || hasExit;
         var state = routed ? TrayVisualState.Routed : relay.Running ? TrayVisualState.RelayOnly : TrayVisualState.Direct;
-        var summary = route.Running
-            ? "маршрутизация включена"
-            : hasExit
-                ? "exit-node подключён"
-                : proxy.Enabled
-                    ? "прокси Xeon включён"
-                    : relay.Running
-                        ? "relay работает"
-                        : "прямой выход";
-        _tray.UpdateState(state, summary, route.Running, proxy.Enabled, hasExit, _busy);
+        var summary = phone.Active
+            ? "через телефон"
+            : route.Running
+                ? "маршрутизация включена"
+                : hasExit
+                    ? "exit-node подключён"
+                    : proxy.Enabled
+                        ? "прокси Xeon включён"
+                        : relay.Running
+                            ? "relay работает"
+                            : "прямой выход";
+        _tray.UpdateState(state, summary, route.Running, phone.Active, proxy.Enabled, hasExit, _busy);
+    }
+
+    private void FillPhoneTab(PhoneStatusSnapshot status)
+    {
+        _cfg.Phone ??= new PhoneSettings();
+        PhoneIpBox.Text = _cfg.Phone.PhoneIp;
+        PhoneSocksPortBox.Text = _cfg.Phone.SocksPort.ToString();
+        PhoneHttpPortBox.Text = _cfg.Phone.HttpPort.ToString();
+        PhoneDnsBox.Text = _cfg.Phone.DnsServer;
+        PhoneModeTunRadio.IsChecked = _cfg.Phone.Mode == PhoneBridgeMode.Tun;
+        PhoneModeProxyRadio.IsChecked = _cfg.Phone.Mode == PhoneBridgeMode.Proxy;
+        PhoneStopHappCheck.IsChecked = _cfg.Phone.StopLocalHapp;
+        PhoneRouteTsCheck.IsChecked = _cfg.Phone.RouteTailscaleViaPhone;
+
+        PhoneTabStateLabel.Text = status.Active
+            ? (status.ActiveMode == PhoneBridgeMode.Tun
+                ? $"Мост включён: TUN ({SingBoxConfigBuilder.PhoneTunInterfaceName}, pid {status.TunPid}) → {status.PhoneIp}:{status.Port}"
+                : $"Мост включён: системный прокси → {status.PhoneIp}:{status.Port}")
+            : "Мост выключен";
+        PhonePowerButton.Content = status.Active ? "Выключить" : "Включить";
+        PhoneGatewayLabel.Text = status.Gateway != null
+            ? $"Обнаруженный шлюз: {status.Gateway.GatewayIp} ({status.Gateway.Kind}: {status.Gateway.InterfaceName}, {status.Gateway.SubnetCidr})"
+            : "Шлюз сети не обнаружен — подключи ПК к точке доступа Wi-Fi / USB-модему или укажи IP вручную.";
     }
 
     private void FillRoutingTab()

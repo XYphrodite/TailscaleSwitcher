@@ -27,7 +27,7 @@ public sealed partial class RoutingCli
         catch { return false; }
     }
 
-    /// <summary>args[0] — "route" или "relay".</summary>
+    /// <summary>args[0] — "route", "relay" или "phone".</summary>
     public async Task<int> RunAsync(string[] args)
     {
         if (args.Length == 0) return Fail("Пустая команда.");
@@ -40,6 +40,7 @@ public sealed partial class RoutingCli
             {
                 "route" or "rt" => parsed.Has("--help", "-h") ? PrintHelp() : await RouteAsync(parsed),
                 "relay" => parsed.Has("--help", "-h") ? PrintHelp() : await RelayAsync(parsed),
+                "phone" or "ph" => parsed.Has("--help", "-h") ? PrintPhoneHelp() : await PhoneAsync(parsed),
                 _ => Fail($"Неизвестная команда '{args[0]}'.")
             };
         }

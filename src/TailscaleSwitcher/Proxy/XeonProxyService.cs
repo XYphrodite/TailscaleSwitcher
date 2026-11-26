@@ -320,6 +320,19 @@ public static class XeonProxyService
         NotifyWinInet();
     }
 
+    /// <summary>Полностью восстанавливает снимок системного прокси Windows (ProxyEnable/Server/Override).</summary>
+    [SupportedOSPlatform("windows")]
+    public static void RestoreState(ProxyState state)
+    {
+        using (var key = Registry.CurrentUser.CreateSubKey(InternetSettingsKeyPath, writable: true))
+        {
+            key.SetValue("ProxyServer", state.Server ?? "", RegistryValueKind.String);
+            key.SetValue("ProxyOverride", state.Override ?? "", RegistryValueKind.String);
+            key.SetValue("ProxyEnable", state.Enabled ? 1 : 0, RegistryValueKind.DWord);
+        }
+        NotifyWinInet();
+    }
+
     [SupportedOSPlatform("windows")]
     public static void Disable(bool isAdmin)
     {

@@ -346,6 +346,107 @@ public static class SingBoxConfigBuilder
         return root.ToJsonString(Pretty);
     }
 
+    private static readonly string[] DohServers = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "149.112.112.112"];
+
+    /// <summary>
+    /// Мост через телефон: весь трафик ПК -> TUN -> SOCKS5 Happ на телефоне (Allow LAN Connections).
+    /// Напрямую: Tailscale, .ts.net, локальные сети, подсеть Wi-Fi телефона, sshd.
+    /// </summary>
+    public static string BuildPhoneBridge(PhoneSettings phone, string phoneIp, string? wifiNet, string? logFile = null)
+    {
+        var dnsServer = string.IsNullOrWhiteSpace(phone.DnsServer) ? "1.1.1.1" : phone.DnsServer.Trim();
+        var remoteDns = new JsonObject { ["tag"] = "dns-remote", ["server"] = dnsServer, ["detour"] = "phone-proxy" };
+        if (DohServers.Contains(dnsServer, StringComparer.OrdinalIgnoreCase))
+        {
+            remoteDns["type"] = "https";
+            remoteDns["server_port"] = 443;
+        }
+        else
+        {
+            remoteDns["type"] = "tcp";
+        }
+
+        var direct = new List<string>(AlwaysDirectProcesses.Where(p => phone.RouteTailscaleViaPhone
+            ? !p.StartsWith("tailscale", StringComparison.OrdinalIgnoreCase)
+            : true)) { "sshd.exe" };
+
+        var rules = new JsonArray
+        {
+            new JsonObject { ["action"] = "sniff" },
+            new JsonObject { ["protocol"] = "dns", ["action"] = "hijack-dns" },
+            new JsonObject { ["process_name"] = ToArray(direct), ["outbound"] = "direct" },
+            new JsonObject { ["domain_suffix"] = ToArray(["ts.net"]), ["outbound"] = "direct" },
+            new JsonObject { ["ip_is_private"] = true, ["outbound"] = "direct" },
+            new JsonObject { ["ip_cidr"] = ToArray([TailscaleCgnat]), ["outbound"] = "direct" },
+            // SOCKS5 телефона не умеет UDP: QUIC отклоняем, браузеры откатятся на TCP
+            new JsonObject { ["network"] = "udp", ["port"] = 443, ["action"] = "reject" }
+        };
+
+        var excludeCidrs = new List<string>();
+        if (!string.IsNullOrWhiteSpace(wifiNet)) excludeCidrs.Add(wifiNet.Trim());
+        foreach (var c in new[]
+        {
+            $"{phoneIp}/32", "127.0.0.0/8", "169.254.0.0/16", TailscaleCgnat,
+            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "224.0.0.0/4", "240.0.0.0/4"
+        })
+        {
+            if (!excludeCidrs.Contains(c, StringComparer.OrdinalIgnoreCase))
+                excludeCidrs.Add(c);
+        }
+
+        var root = new JsonObject
+        {
+            ["log"] = LogSection(logFile),
+            ["dns"] = new JsonObject
+            {
+                ["servers"] = new JsonArray(remoteDns, new JsonObject { ["type"] = "local", ["tag"] = "local" }),
+                ["rules"] = new JsonArray(new JsonObject
+                {
+                    ["action"] = "route",
+                    ["server"] = "local",
+                    ["domain_suffix"] = ToArray(["ts.net"])
+                }),
+                ["final"] = "dns-remote",
+                ["strategy"] = "ipv4_only"
+            },
+            ["inbounds"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "tun",
+                    ["tag"] = "tun-in",
+                    ["interface_name"] = PhoneTunInterfaceName,
+                    ["address"] = new JsonArray(PhoneTunAddress),
+                    ["mtu"] = 1400,
+                    ["auto_route"] = true,
+                    ["strict_route"] = false,
+                    ["stack"] = "mixed",
+                    ["route_exclude_address"] = ToArray(excludeCidrs)
+                }
+            },
+            ["outbounds"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "socks",
+                    ["tag"] = "phone-proxy",
+                    ["server"] = phoneIp,
+                    ["server_port"] = phone.SocksPort,
+                    ["version"] = "5"
+                },
+                new JsonObject { ["type"] = "direct", ["tag"] = "direct" }
+            },
+            ["route"] = new JsonObject
+            {
+                ["rules"] = rules,
+                ["final"] = "phone-proxy",
+                ["auto_detect_interface"] = true,
+                ["default_domain_resolver"] = "local"
+            }
+        };
+        return root.ToJsonString(Pretty);
+    }
+
     private static JsonObject LogSection(string? logFile)
     {
         var log = new JsonObject { ["level"] = "warn", ["timestamp"] = true };

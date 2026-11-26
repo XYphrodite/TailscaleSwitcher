@@ -135,6 +135,9 @@ public sealed partial class RoutingCli
         if (!await XeonProxyService.ProbeTcpAsync($"{p.Node}:{p.Port}", 3000) && !force)
             return Fail($"Relay {p.Node}:{p.Port} не отвечает. Запущен ли 'relay start' на выходном ПК и открыт ли firewall? (--force чтобы игнорировать)", 2);
 
+        if (PhoneBridgeService.IsTunRunning())
+            await PhoneBridgeService.StopAsync(clean: false, m => _out.WriteLine(m));
+
         var exe = await SingBoxInstaller.EnsureAsync(m => _out.WriteLine(m));
         if (ClientRunner.GetStatus().Running) ClientRunner.Stop();
 
@@ -150,6 +153,20 @@ public sealed partial class RoutingCli
             ? $"Включено: профиль '{p.Name}' -> {p.Node}:{p.Port}. ВЕСЬ трафик идёт через этот узел (исключения: приложений {p.BypassApps.Count}, адресов {p.BypassHosts.Count})."
             : $"Включено: профиль '{p.Name}' -> {p.Node}:{p.Port}. Приложений: {p.Apps.Count}, адресов: {p.Hosts.Count}.");
         return 0;
+    }
+
+    internal static void StopClientIfRunning()
+    {
+        if (ClientRunner.GetStatus().Running) ClientRunner.Stop();
+        if (OperatingSystem.IsWindows() && File.Exists(ProxyRestoreMarker))
+        {
+            try
+            {
+                XeonProxyService.SetEnabled(true);
+                File.Delete(ProxyRestoreMarker);
+            }
+            catch { }
+        }
     }
 
     private int RouteOff()

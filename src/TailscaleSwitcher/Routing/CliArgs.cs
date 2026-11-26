@@ -5,7 +5,8 @@ public sealed class CliArgs
 {
     private static readonly HashSet<string> BoolFlags = new(StringComparer.OrdinalIgnoreCase)
     {
-        "--force", "-f", "--no-remote-dns", "--help", "-h", "--persist", "--all"
+        "--force", "-f", "--no-remote-dns", "--help", "-h", "--persist", "--all",
+        "--clean", "--skip-health", "--no-stop-happ", "--no-ts-route"
     };
 
     public List<string> Positional { get; } = [];
